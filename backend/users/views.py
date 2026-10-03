@@ -16,6 +16,7 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from .otp_store import set_otp, verify_otp_code, is_otp_verified, clear_otp
+from .roles import account_type, normalize_role
 from .serializers import ProfileUpdateSerializer
 
 User = get_user_model()
@@ -215,7 +216,7 @@ def verify_otp_register(request):
                 password=password,
             )
             user.phone = phone
-            user.role = role
+            user.role = normalize_role(role)
             user.save(update_fields=["phone", "role"])
     except Exception as exc:
         print("REGISTER ERROR:", exc)
@@ -240,11 +241,9 @@ def verify_otp_register(request):
         "refresh": str(refresh),
 
         "role": user.role,
-
+        "account_type": account_type(user.role),
         "username": user.username,
-
         "email": user.email,
-
     })
 
 
@@ -278,7 +277,7 @@ def login(request):
     if user is None:
         return Response({"error": "Invalid username or password"}, status=401)
 
-    if not user.is_active:
+    if not user.is_active or getattr(user, "is_suspended", False):
         return Response({"error": "Account is disabled"}, status=403)
 
     refresh = RefreshToken.for_user(user)
@@ -288,6 +287,7 @@ def login(request):
         "access": str(refresh.access_token),
         "refresh": str(refresh),
         "role": user.role,
+        "account_type": account_type(user.role),
         "username": user.username,
         "email": user.email,
     })

@@ -47,7 +47,7 @@ INSTALLED_APPS = [
 
 
     "corsheaders",
-    "users",  # accounts (auth, OTP)
+    "users.apps.UsersConfig",
     "kyc",
     "marketplace",  # services catalog
     "portfolio",
@@ -167,3 +167,6 @@ EMAIL_HOST_USER = "kripapdl12@gmail.com"
 EMAIL_HOST_PASSWORD = "tvqz agzt jycv jvdn"  # Gmail app password (no spaces)
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 FRONTEND_APP_URL = "exp://192.168.0.101:8081"
+
+ESEWA_MERCHANT_CODE = "EPAYTEST"
+ESEWA_SECRET = "test-esewa-secret"

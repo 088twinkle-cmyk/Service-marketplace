@@ -5,6 +5,7 @@ from rest_framework.permissions import IsAuthenticatedOrReadOnly
 from rest_framework.response import Response
 
 from kyc.models import ProviderProfile
+from users.roles import is_freelancer
 from .geo import CITY_COORDS, haversine_km
 from .models import Service
 from .serializers import ServiceSerializer
@@ -17,8 +18,8 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         user = self.request.user
-        if user.role != "provider":
-            raise PermissionDenied("Only providers can publish services.")
+        if not is_freelancer(user):
+            raise PermissionDenied("Only freelancers can publish services.")
 
         profile = getattr(user, "provider_profile", None)
         if not profile:
