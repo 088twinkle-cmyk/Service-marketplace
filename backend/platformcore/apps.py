@@ -1,4 +1,4 @@
 from django.apps import AppConfig
-class ChatConfig(AppConfig):
+class PlatformcoreConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
-    name = "chats"
+    name = "platformcore"

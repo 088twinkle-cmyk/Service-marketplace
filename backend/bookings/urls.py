@@ -1,10 +1,8 @@
-from django.urls import path, include
+from django.urls import include, path
 from rest_framework.routers import DefaultRouter
-
-from .views import AvailabilitySlotViewSet, BookingViewSet
-
+from .views import AttachmentViewSet, MilestoneViewSet, ProjectBookingViewSet
 router = DefaultRouter()
-router.register(r"availability", AvailabilitySlotViewSet, basename="availability")
-router.register(r"", BookingViewSet, basename="booking")
-
-urlpatterns = router.urls
+router.register("projects", ProjectBookingViewSet, basename="project")
+router.register("attachments", AttachmentViewSet, basename="attachment")
+router.register("milestones", MilestoneViewSet, basename="milestone")
+urlpatterns = [path("", include(router.urls))]

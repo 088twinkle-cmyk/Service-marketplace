@@ -1,11 +1,6 @@
-from django.urls import path
-
-from . import views
-
-urlpatterns = [
-    path("rooms/", views.list_rooms),
-    path("rooms/<int:room_id>/messages/", views.room_messages),
-    path("rooms/<int:room_id>/send/", views.send_message),
-    path("rooms/<int:room_id>/mark-read/", views.mark_read),
-    path("booking/<int:booking_id>/", views.room_for_booking),
-]
+from django.urls import include, path
+from rest_framework.routers import DefaultRouter
+from .views import ConversationViewSet
+router = DefaultRouter()
+router.register("conversations", ConversationViewSet, basename="conversation")
+urlpatterns = [path("", include(router.urls))]
