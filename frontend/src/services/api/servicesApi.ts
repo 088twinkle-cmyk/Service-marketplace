@@ -39,11 +39,11 @@ export const servicesApi = {
     if (params.lng != null) query.lng = String(params.lng);
     if (params.city) query.city = params.city;
     if (params.search) query.search = params.search;
-    const res = await api.get<ServiceItem[]>("services/", { params: query });
+    const res = await api.get<ServiceItem[]>("api/catalog/services/", { params: query });
     return Array.isArray(res.data) ? res.data : [];
   },
   get: async (id: number): Promise<ServiceItem> => {
-    const res = await api.get<ServiceItem>(`services/${id}/`);
+    const res = await api.get<ServiceItem>(`api/catalog/services/${id}/`);
     return res.data;
   },
 };

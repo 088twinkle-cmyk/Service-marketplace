@@ -2,7 +2,7 @@ import Constants from "expo-constants";
 import { Platform } from "react-native";
 
 /** Last-resort LAN IP — prefer Expo debuggerHost or app.json extra.apiUrl. */
-const FALLBACK_HOST = "192.168.0.101";
+const FALLBACK_HOST = "192.168.1.88";
 export const API_PORT = 8001;
 
 function hostFromExpo(): string | null {

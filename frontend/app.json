@@ -46,7 +46,9 @@
             "imageWidth": 76
           }
         }
-      ]
+      ],
+      "expo-status-bar",
+      "expo-image"
     ],
     "experiments": {
       "typedRoutes": true,

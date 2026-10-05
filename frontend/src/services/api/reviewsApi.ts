@@ -13,10 +13,10 @@ export type ReviewItem = {
 export const reviewsApi = {
   byProvider: (providerId: number) =>
     api
-      .get<ReviewItem[]>("reviews/", { params: { provider: providerId } })
+      .get<ReviewItem[]>("api/reviews/", { params: { provider: providerId } })
       .then((r) => (Array.isArray(r.data) ? r.data : [])),
   byService: (serviceId: number) =>
     api
-      .get<ReviewItem[]>("reviews/", { params: { service: serviceId } })
+      .get<ReviewItem[]>("api/reviews/", { params: { service: serviceId } })
       .then((r) => (Array.isArray(r.data) ? r.data : [])),
 };

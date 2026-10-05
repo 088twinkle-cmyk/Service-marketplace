@@ -18,13 +18,13 @@ export type ProviderProfile = {
 
 export const kycApi = {
   getProfile: () =>
-    api.get<ProviderProfile>("providers/profile/").then((r) => r.data),
+    api.get<ProviderProfile>("api/auth/freelancer-profile/").then((r) => r.data),
   saveProfile: (data: ProviderProfilePayload) =>
     api
-      .post<ProviderProfile>("providers/profile/", data)
+      .post<ProviderProfile>("api/auth/freelancer-profile/", data)
       .then((r) => r.data),
   submitKyc: (id_number: string) =>
     api
-      .post<ProviderProfile>("kyc/submit/", { id_number })
+      .post<ProviderProfile>("api/auth/kyc/", { id_number })
       .then((r) => r.data),
 };

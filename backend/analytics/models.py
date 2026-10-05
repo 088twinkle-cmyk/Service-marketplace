@@ -34,7 +34,7 @@ class Report(models.Model):
         blank=True,
     )
     booking = models.ForeignKey(
-        "bookings.Booking",
+        "bookings.ProjectBooking",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,

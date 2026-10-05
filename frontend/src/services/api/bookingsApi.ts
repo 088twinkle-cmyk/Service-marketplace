@@ -1,62 +1,105 @@
 import { api } from "./client";
 
-export type AvailabilitySlot = {
-  id: number;
-  provider: number;
-  service: number | null;
-  date: string;
-  start_time: string;
-  end_time: string;
-  status: "available" | "booked" | "blocked";
-  booking: number | null;
-};
-
 export type BookingItem = {
   id: number;
   service: number;
   service_title?: string;
+  title?: string;
+  requirements?: string;
   status: string;
-  booking_time: string | null;
+  booking_time?: string | null;
+  proposed_price?: string | number | null;
+  agreed_price?: string | number | null;
   can_cancel?: boolean;
 };
 
 export const bookingsApi = {
-  listAvailability: (params: {
-    provider?: number;
-    service?: number;
-    month: string;
-  }) =>
+  // Get bookings visible to the current user
+  listBookings: () =>
     api
-      .get<AvailabilitySlot[]>("bookings/availability/", { params })
+      .get<BookingItem[]>("api/bookings/projects/")
       .then((r) => (Array.isArray(r.data) ? r.data : [])),
 
-  createAvailability: (data: {
+  // Create a new project booking
+  createBooking: (data: {
     service: number;
-    date: string;
-    start_time?: string;
-    end_time?: string;
-    status?: string;
-  }) => api.post<AvailabilitySlot>("bookings/availability/", data),
+    title?: string;
+    requirements?: string;
+    proposed_price?: string | number;
+    booking_type?: string;
+    service_mode?: string;
+    category?: number;
+    open_to_all?: boolean;
+  }) =>
+    api.post<BookingItem>("api/bookings/projects/", data),
 
-  toggleBlock: (slotId: number) =>
-    api.post<AvailabilitySlot>(`bookings/availability/${slotId}/toggle_block/`),
-
-  createBooking: (data: { service: number; slot_id: number; notes?: string }) =>
-    api.post<BookingItem>("bookings/", data),
-
+  // Accept booking
   acceptBooking: (bookingId: number) =>
-    api.post<{ message: string; booking_id: number; status: string }>(
-      `bookings/${bookingId}/accept/`
+    api.post<BookingItem>(
+      `api/bookings/projects/${bookingId}/accept/`
     ),
 
-  rejectBooking: (bookingId: number) =>
-    api.post<{ message: string; booking_id: number; status: string }>(
-      `bookings/${bookingId}/reject/`
+  // Reject booking
+  rejectBooking: (bookingId: number, data?: Record<string, unknown>) =>
+    api.post<BookingItem>(
+      `api/bookings/projects/${bookingId}/reject/`,
+      data ?? {}
     ),
 
+  // Cancel booking
   cancelBooking: (bookingId: number) =>
-    api.post(`bookings/${bookingId}/cancel/`),
+    api.post<BookingItem>(
+      `api/bookings/projects/${bookingId}/cancel/`
+    ),
 
-  listBookings: () =>
-    api.get<BookingItem[]>("bookings/").then((r) => (Array.isArray(r.data) ? r.data : [])),
+  // Freelancer sends a counter offer
+  counterOffer: (
+    bookingId: number,
+    data: {
+      amount: string | number;
+      message?: string;
+    }
+  ) =>
+    api.post<BookingItem>(
+      `api/bookings/projects/${bookingId}/counter/`,
+      data
+    ),
+
+  // Client starts payment
+  startPayment: (bookingId: number) =>
+    api.post<BookingItem>(
+      `api/bookings/projects/${bookingId}/start_payment/`
+    ),
+
+  // Freelancer starts work
+  startWork: (bookingId: number) =>
+    api.post<BookingItem>(
+      `api/bookings/projects/${bookingId}/start_work/`
+    ),
+
+  // Freelancer submits deliverable
+  submitDeliverable: (
+    bookingId: number,
+    data: Record<string, unknown>
+  ) =>
+    api.post<BookingItem>(
+      `api/bookings/projects/${bookingId}/submit_deliverable/`,
+      data
+    ),
+
+  // Client approves completed work
+  approve: (bookingId: number) =>
+    api.post<BookingItem>(
+      `api/bookings/projects/${bookingId}/approve/`
+    ),
+
+  // Client requests revision
+  requestRevision: (
+    bookingId: number,
+    message: string
+  ) =>
+    api.post<BookingItem>(
+      `api/bookings/projects/${bookingId}/request_revision/`,
+      { message }
+    ),
 };

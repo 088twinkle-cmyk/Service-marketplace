@@ -5,53 +5,127 @@ export type UserProfile = {
   username: string;
   email: string;
   role: string;
-  phone: string;
-  profile_photo: string;
+  phone: string | null;
+
+  is_otp_verified?: boolean;
+  is_active_account?: boolean;
+  date_joined?: string;
+
+  profile_photo?: string | null;
   kyc_status?: string;
   is_verified?: boolean;
+
+  client_profile?: any;
+  freelancer_profile?: any;
+  profile?: any;
 };
 
 export const userApi = {
-  me: () => api.get<UserProfile>("users/me/").then((r) => r.data),
+  // ------------------------------------------
+  // Current logged-in user
+  // ------------------------------------------
 
-  updateProfile: (data: FormData) =>
+  me: () =>
     api
-      .patch<UserProfile>("users/update-profile/", data, {
-        headers: { "Content-Type": "multipart/form-data" },
-      })
+      .get<UserProfile>("api/auth/me/")
       .then((r) => r.data),
 
-  deletePhoto: () => api.delete<UserProfile>("users/me/photo/").then((r) => r.data),
+  // ------------------------------------------
+  // Save profile information
+  // ------------------------------------------
 
-  changePassword: (current_password: string, new_password: string) =>
-    api
-      .post<{ message: string }>("users/change-password/", {
-        current_password,
-        new_password,
-      })
-      .then((r) => r.data),
-      
-  requestEmailChange: (email: string) =>
-    api.post<{ message: string }>("users/request-email-change/", { email }).then((r) => r.data),
-    
-  verifyEmailChange: (email: string, otp: string) =>
-    api.post<{ message: string }>("users/verify-email-change/", { email, otp }).then((r) => r.data),
+  updateProfile: (data: {
+    username?: string;
+    email?: string;
+    phone?: string;
 
-  forgotPassword: (email: string) =>
-    api
-      .post<{ message: string; email_sent?: boolean }>("users/forgot-password/", { email })
-      .then((r) => r.data),
+    full_name?: string;
+    bio?: string;
+    location?: string;
+    address?: string;
 
-  resetPassword: (data: {
-    email: string;
-    uid: string;
-    token: string;
-    new_password: string;
+    professional_title?: string;
+    experience_years?: number;
+    languages?: string;
+    education?: string;
+    certifications?: string;
   }) =>
-    api.post<{ message: string }>("users/reset-password/", data).then((r) => r.data),
-
-  checkUsername: (username: string) =>
     api
-      .post<{ available: boolean; username: string }>("users/check-username/", { username })
+      .patch<UserProfile>(
+        "api/auth/profile/",
+        data
+      )
       .then((r) => r.data),
+
+  // ------------------------------------------
+  // Upload profile picture
+  // ------------------------------------------
+
+  uploadPhoto: (formData: FormData) =>
+    api
+      .post(
+        "api/auth/profile/photo/",
+        formData,
+        {
+          headers: {
+            "Content-Type": "multipart/form-data",
+          },
+        }
+      )
+      .then((r) => r.data),
+
+  // ------------------------------------------
+  // Delete profile picture
+  // ------------------------------------------
+
+  deletePhoto: () =>
+    api
+      .delete(
+        "api/auth/profile/photo/delete/"
+      )
+      .then((r) => r.data),
+
+  // ------------------------------------------
+  // Change password
+  // ------------------------------------------
+
+  changePassword: (
+    current_password: string,
+    new_password: string
+  ) =>
+    api
+      .post<{ message: string }>(
+        "api/auth/password/change/",
+        {
+          current_password,
+          new_password,
+        }
+      )
+      .then((r) => r.data),
+
+  // ------------------------------------------
+  // Existing client profile
+  // ------------------------------------------
+
+  clientProfile: () =>
+    api
+      .get(
+        "api/auth/client-profile/"
+      )
+      .then((r) => r.data),
+
+  // ------------------------------------------
+  // Existing freelancer profile
+  // ------------------------------------------
+
+  freelancerProfile: () =>
+    api
+      .get(
+        "api/auth/freelancer-profile/"
+      )
+      .then((r) => r.data),
+
+  // ------------------------------------------
+  // Legacy methods (removed - use accounts endpoints)
+  // ------------------------------------------
 };

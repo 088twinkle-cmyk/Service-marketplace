@@ -26,19 +26,19 @@ export type ChatRoom = {
 
 export const chatsApi = {
   listRooms: () =>
-    api.get<ChatRoom[]>("chat/rooms/").then((r) => (Array.isArray(r.data) ? r.data : [])),
+    api.get<ChatRoom[]>("api/chat/conversations/").then((r) => (Array.isArray(r.data) ? r.data : [])),
 
   getMessages: (roomId: number) =>
     api
-      .get<ChatMessage[]>(`chat/rooms/${roomId}/messages/`)
+      .get<ChatMessage[]>(`api/chat/conversations/${roomId}/messages/`)
       .then((r) => (Array.isArray(r.data) ? r.data : [])),
 
   sendMessage: (roomId: number, data: { text?: string; image_url?: string }) =>
-    api.post<ChatMessage>(`chat/rooms/${roomId}/send/`, data).then((r) => r.data),
+    api.post<ChatMessage>(`api/chat/conversations/${roomId}/send/`, data).then((r) => r.data),
 
   markRead: (roomId: number) =>
-    api.post(`chat/rooms/${roomId}/mark-read/`),
+    api.post(`api/chat/conversations/${roomId}/mark-read/`),
 
   roomForBooking: (bookingId: number) =>
-    api.get<ChatRoom>(`chat/booking/${bookingId}/`).then((r) => r.data),
+    api.get<ChatRoom>(`api/chat/booking/${bookingId}/`).then((r) => r.data),
 };
