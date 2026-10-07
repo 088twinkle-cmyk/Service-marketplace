@@ -1,21 +1,24 @@
+/**
+ * ForgotPasswordScreen — request a password reset link + token by email.
+ */
 import React, { useState } from "react";
-import {
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  ScrollView,
-  ActivityIndicator,
-} from "react-native";
-import { useRouter, useLocalSearchParams } from "expo-router";
+import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from "react-native";
+
+import { useRouter } from "expo-router";
+
+import AuthLayout from "../../components/AuthLayout";
+import FeedbackModal, { type FeedbackType } from "../../components/FeedbackModal";
+import Button from "../../components/ui/Button";
+import Icon from "../../components/ui/Icon";
+import Input from "../../components/ui/Input";
 import { authApi } from "../../services/api/authApi";
 import { getApiErrorMessage } from "../../services/api/client";
-import AuthLayout, { authFormStyles as s } from "../../components/AuthLayout";
-import FeedbackModal, { type FeedbackType } from "../../components/FeedbackModal";
+import { colors, radius, spacing, typography } from "../../theme/tokens";
 
 export default function ForgotPasswordScreen() {
   const router = useRouter();
   const [email, setEmail] = useState("");
+  const [error, setError] = useState<string | undefined>();
   const [loading, setLoading] = useState(false);
   const [popup, setPopup] = useState({
     visible: false,
@@ -41,60 +44,76 @@ export default function ForgotPasswordScreen() {
   const submit = async () => {
     const trimmed = email.trim().toLowerCase();
     if (!trimmed) {
-      show("error", "Email required", "Enter the email linked to your account.");
+      setError("Enter the email linked to your account.");
       return;
     }
+    if (!/^\S+@\S+\.\S+$/.test(trimmed)) {
+      setError("That email address looks incomplete.");
+      return;
+    }
+
     setLoading(true);
     try {
       const res = await authApi.forgotPassword(trimmed);
       show(
         "success",
         "Check your email",
-        res.message || "If registered, you will receive a reset link and token.",
-        () => router.push({ pathname: "/reset-password", params: { email: trimmed } })
+        res.message || "If that email is registered, a reset link and token are on the way.",
+        () => router.push({ pathname: "/reset-password", params: { email: trimmed } } as never)
       );
     } catch (err) {
-      show("error", "Failed", getApiErrorMessage(err, "Could not send reset email."));
+      show("error", "Could not send email", getApiErrorMessage(err, "Please try again."));
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <AuthLayout
-      title="Forgot password"
-      subtitle="Enter your email. We will send a reset link and token."
-      showBack
-    >
-      <ScrollView keyboardShouldPersistTaps="handled">
-        <View style={s.card}>
-          <Text style={s.label}>Email</Text>
-          <TextInput
+    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+      <AuthLayout
+        title="Forgot your password?"
+        subtitle="Enter your email and we will send you a reset link with a user ID and token."
+        showBack
+        onBack={() => router.back()}
+      >
+        <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+          <Input
+            label="Email"
             placeholder="you@example.com"
             value={email}
-            onChangeText={setEmail}
+            onChangeText={(text) => {
+              setEmail(text);
+              setError(undefined);
+            }}
             autoCapitalize="none"
             keyboardType="email-address"
-            style={s.input}
+            autoComplete="email"
+            icon="user"
+            error={error}
+            required
           />
-          <TouchableOpacity
-            onPress={submit}
-            disabled={loading}
-            style={[s.button, loading && s.buttonDisabled]}
-          >
-            {loading ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={s.buttonText}>Send reset email</Text>
-            )}
-          </TouchableOpacity>
-          <TouchableOpacity style={s.linkRow} onPress={() => router.push("/reset-password")}>
-            <Text style={s.link}>
-              Have a token? <Text style={s.linkBold}>Reset password</Text>
+
+          <Button label="Send reset email" size="lg" fullWidth loading={loading} onPress={submit} />
+
+          <View style={styles.hintBox}>
+            <Icon name="info" size={16} color={colors.primaryDark} />
+            <Text style={styles.hintText}>
+              The reset email contains your user ID and a one-time token. You will need both on the
+              next screen.
             </Text>
-          </TouchableOpacity>
-        </View>
-      </ScrollView>
+          </View>
+
+          <View style={styles.footer}>
+            <Text style={styles.footerText}>Already have a token?</Text>
+            <Button
+              label="Reset password"
+              variant="ghost"
+              size="sm"
+              onPress={() => router.push("/reset-password")}
+            />
+          </View>
+        </ScrollView>
+      </AuthLayout>
 
       <FeedbackModal
         visible={popup.visible}
@@ -102,8 +121,33 @@ export default function ForgotPasswordScreen() {
         title={popup.title}
         message={popup.message}
         onClose={close}
-        confirmLabel={popup.type === "success" ? "Continue" : "OK"}
+        confirmLabel={popup.type === "success" ? "Enter token" : "OK"}
       />
-    </AuthLayout>
+    </KeyboardAvoidingView>
   );
 }
+
+const styles = StyleSheet.create({
+  flex: { flex: 1 },
+  hintBox: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    alignItems: "flex-start",
+    marginTop: spacing.lg,
+    padding: spacing.md,
+    borderRadius: radius.md,
+    backgroundColor: colors.primarySoft,
+    borderWidth: 1,
+    borderColor: colors.primarySoftBorder,
+  },
+  hintText: { flex: 1, ...typography.small, color: colors.primaryDark },
+  footer: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.xs,
+    marginTop: spacing.md,
+    flexWrap: "wrap",
+  },
+  footerText: { color: colors.textMuted, fontSize: 13.5 },
+});

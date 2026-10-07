@@ -1,13 +1,11 @@
+/**
+ * FeedbackModal — success / error / info dialog.
+ * Thin, backwards-compatible wrapper around the `Dialog` primitive.
+ */
 import React from "react";
-import {
-  Modal,
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  Pressable,
-} from "react-native";
-import { PRIMARY, CARD, TEXT, TEXT_MUTED, SUCCESS, BORDER } from "../theme/colors";
+
+import Button from "./ui/Button";
+import Dialog from "./ui/Dialog";
 
 export type FeedbackType = "success" | "error" | "info";
 
@@ -20,17 +18,11 @@ type Props = {
   confirmLabel?: string;
 };
 
-const ICONS: Record<FeedbackType, string> = {
-  success: "✓",
-  error: "✕",
-  info: "ℹ",
-};
-
-const ACCENTS: Record<FeedbackType, string> = {
-  success: SUCCESS,
-  error: "#E53935",
-  info: PRIMARY,
-};
+const ICONS = {
+  success: "check",
+  error: "alert",
+  info: "info",
+} as const;
 
 export default function FeedbackModal({
   visible,
@@ -38,71 +30,24 @@ export default function FeedbackModal({
   title,
   message,
   onClose,
-  confirmLabel = "OK",
+  confirmLabel,
 }: Props) {
   return (
-    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.overlay} onPress={onClose}>
-        <Pressable style={styles.card} onPress={(e) => e.stopPropagation()}>
-          <View style={[styles.iconCircle, { backgroundColor: `${ACCENTS[type]}22` }]}>
-            <Text style={[styles.icon, { color: ACCENTS[type] }]}>{ICONS[type]}</Text>
-          </View>
-          <Text style={styles.title}>{title}</Text>
-          <Text style={styles.message}>{message}</Text>
-          <TouchableOpacity
-            style={[styles.btn, { backgroundColor: ACCENTS[type] }]}
-            onPress={onClose}
-          >
-            <Text style={styles.btnText}>{confirmLabel}</Text>
-          </TouchableOpacity>
-        </Pressable>
-      </Pressable>
-    </Modal>
+    <Dialog
+      visible={visible}
+      onClose={onClose}
+      title={title}
+      description={message}
+      icon={ICONS[type]}
+      tone={type === "error" ? "danger" : type === "success" ? "success" : "primary"}
+      footer={
+        <Button
+          label={confirmLabel ?? (type === "error" ? "Got it" : "Continue")}
+          fullWidth
+          variant={type === "error" ? "outline" : "primary"}
+          onPress={onClose}
+        />
+      }
+    />
   );
 }
-
-const styles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.45)",
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 24,
-  },
-  card: {
-    width: "100%",
-    maxWidth: 340,
-    backgroundColor: CARD,
-    borderRadius: 20,
-    padding: 24,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: BORDER,
-  },
-  iconCircle: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 16,
-  },
-  icon: { fontSize: 28, fontWeight: "800" },
-  title: { fontSize: 20, fontWeight: "800", color: TEXT, textAlign: "center" },
-  message: {
-    fontSize: 15,
-    color: TEXT_MUTED,
-    textAlign: "center",
-    marginTop: 10,
-    lineHeight: 22,
-  },
-  btn: {
-    marginTop: 22,
-    paddingVertical: 14,
-    paddingHorizontal: 32,
-    borderRadius: 12,
-    width: "100%",
-    alignItems: "center",
-  },
-  btnText: { color: "#fff", fontWeight: "700", fontSize: 16 },
-});

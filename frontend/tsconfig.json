@@ -28,8 +28,6 @@
       "@/assets/*": [
         "./assets/*"
       ],
-      
-     
       "expo-image": [
         "./src/shims/expo-image.tsx"
       ],

@@ -1,46 +1,72 @@
+/**
+ * ReviewList — customer reviews for a provider/service.
+ * Shows the real reviews from `reviewsApi`; the empty state nudges the first
+ * booking instead of inventing sample content.
+ */
 import React from "react";
-import { View, Text, StyleSheet } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
+
 import type { ReviewItem } from "../services/api/reviewsApi";
-import { CARD, TEXT, TEXT_MUTED, BORDER, STAR } from "../theme/colors";
+import { colors, radius, spacing, typography, weight } from "../theme/tokens";
+import Avatar from "./ui/Avatar";
+import Icon from "./ui/Icon";
+import { EmptyState } from "./ui/States";
 
 type Props = { reviews: ReviewItem[] };
 
-function Stars({ rating }: { rating: number }) {
+function Stars({ rating, size = 13 }: { rating: number; size?: number }) {
   return (
-    <Text style={styles.stars}>
+    <View style={styles.stars}>
       {[1, 2, 3, 4, 5].map((i) => (
-        <Text key={i} style={{ color: i <= rating ? STAR : BORDER }}>
-          ★
-        </Text>
+        <Icon key={i} name="star" size={size} color={i <= rating ? colors.star : colors.border} />
       ))}
-    </Text>
+    </View>
   );
 }
 
 export default function ReviewList({ reviews }: Props) {
   if (reviews.length === 0) {
     return (
-      <View style={styles.empty}>
-        <Text style={styles.emptyText}>No reviews yet. Be the first to book!</Text>
-      </View>
+      <EmptyState
+        icon="chat"
+        title="No reviews yet"
+        description="Reviews appear here after a customer completes a booking with this provider."
+        bare
+      />
     );
   }
 
+  const average =
+    reviews.reduce((total, review) => total + Number(review.rating || 0), 0) / reviews.length;
+
   return (
     <View style={styles.wrap}>
-      {reviews.map((r) => (
-        <View key={r.id} style={styles.item}>
+      <View style={styles.summary}>
+        <Text style={styles.summaryValue}>{average.toFixed(1)}</Text>
+        <View>
+          <Stars rating={Math.round(average)} size={15} />
+          <Text style={styles.summaryLabel}>
+            {reviews.length} review{reviews.length === 1 ? "" : "s"}
+          </Text>
+        </View>
+      </View>
+
+      {reviews.map((review) => (
+        <View key={review.id} style={styles.item}>
           <View style={styles.head}>
-            <View style={styles.avatar}>
-              <Text style={styles.avatarLetter}>{r.customer_name.charAt(0).toUpperCase()}</Text>
+            <Avatar name={review.customer_name} size={38} />
+            <View style={styles.headText}>
+              <Text style={styles.name}>{review.customer_name}</Text>
+              <Stars rating={review.rating} />
             </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.name}>{r.customer_name}</Text>
-              <Stars rating={r.rating} />
-            </View>
-            <Text style={styles.date}>{r.created_at.slice(0, 10)}</Text>
+            <Text style={styles.date}>
+              {new Date(review.created_at).toLocaleDateString(undefined, {
+                year: "numeric",
+                month: "short",
+              })}
+            </Text>
           </View>
-          {r.comment ? <Text style={styles.comment}>{r.comment}</Text> : null}
+          {review.comment ? <Text style={styles.comment}>{review.comment}</Text> : null}
         </View>
       ))}
     </View>
@@ -48,29 +74,31 @@ export default function ReviewList({ reviews }: Props) {
 }
 
 const styles = StyleSheet.create({
-  wrap: { gap: 12 },
-  empty: { padding: 20, backgroundColor: CARD, borderRadius: 8, borderWidth: 1, borderColor: BORDER },
-  emptyText: { color: TEXT_MUTED, textAlign: "center" },
-  item: {
-    backgroundColor: CARD,
-    padding: 16,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: BORDER,
-  },
-  head: { flexDirection: "row", alignItems: "flex-start", marginBottom: 8 },
-  avatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#E8E8E8",
+  wrap: { gap: spacing.md },
+  summary: {
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    marginRight: 10,
+    gap: spacing.md,
+    padding: spacing.lg,
+    borderRadius: radius.lg,
+    backgroundColor: colors.surfaceAlt,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
-  avatarLetter: { fontWeight: "700", color: TEXT },
-  name: { fontWeight: "700", color: TEXT, fontSize: 14 },
-  stars: { fontSize: 12, marginTop: 2 },
-  date: { fontSize: 11, color: TEXT_MUTED },
-  comment: { fontSize: 14, color: TEXT, lineHeight: 21 },
+  summaryValue: { ...typography.h2, color: colors.text },
+  summaryLabel: { ...typography.caption, color: colors.textMuted, marginTop: 2 },
+  item: {
+    backgroundColor: colors.surface,
+    padding: spacing.lg,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    gap: spacing.sm,
+  },
+  head: { flexDirection: "row", alignItems: "center", gap: spacing.md },
+  headText: { flex: 1, gap: 3 },
+  stars: { flexDirection: "row", gap: 2 },
+  name: { ...typography.bodyStrong, color: colors.text },
+  date: { fontSize: 11.5, color: colors.textSubtle, fontWeight: weight.medium },
+  comment: { ...typography.body, color: colors.text, lineHeight: 22 },
 });
