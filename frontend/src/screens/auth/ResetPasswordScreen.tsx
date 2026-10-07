@@ -1,27 +1,38 @@
+/**
+ * ResetPasswordScreen — complete a password reset with the emailed user ID and
+ * one-time token.
+ */
 import React, { useState } from "react";
-import {
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  ScrollView,
-  ActivityIndicator,
-} from "react-native";
-import { useRouter, useLocalSearchParams } from "expo-router";
+import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from "react-native";
+
+import { useLocalSearchParams, useRouter } from "expo-router";
+
+import AuthLayout from "../../components/AuthLayout";
+import FeedbackModal, { type FeedbackType } from "../../components/FeedbackModal";
+import Button from "../../components/ui/Button";
+import Input, { PasswordInput } from "../../components/ui/Input";
 import { authApi } from "../../services/api/authApi";
 import { getApiErrorMessage } from "../../services/api/client";
-import AuthLayout, { authFormStyles as s } from "../../components/AuthLayout";
-import FeedbackModal, { type FeedbackType } from "../../components/FeedbackModal";
+import { colors, spacing } from "../../theme/tokens";
 
 export default function ResetPasswordScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ email?: string; uid?: string; token?: string }>();
+
   const [email, setEmail] = useState(params.email?.toString() || "");
   const [uid, setUid] = useState(params.uid?.toString() || "");
   const [token, setToken] = useState(params.token?.toString() || "");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [errors, setErrors] = useState<{
+    email?: string;
+    uid?: string;
+    token?: string;
+    password?: string;
+    confirm?: string;
+  }>({});
   const [loading, setLoading] = useState(false);
+
   const [popup, setPopup] = useState({
     visible: false,
     type: "info" as FeedbackType,
@@ -44,18 +55,16 @@ export default function ResetPasswordScreen() {
   };
 
   const submit = async () => {
-    if (!email.trim() || !uid.trim() || !token.trim() || !newPassword) {
-      show("error", "Missing fields", "Fill in email, user ID, token, and new password.");
-      return;
-    }
-    if (newPassword.length < 6) {
-      show("error", "Too short", "Password must be at least 6 characters.");
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      show("error", "Mismatch", "Passwords do not match.");
-      return;
-    }
+    const nextErrors: typeof errors = {};
+    if (!email.trim()) nextErrors.email = "Enter the email you requested the reset for.";
+    if (!uid.trim()) nextErrors.uid = "Paste the user ID from the reset email.";
+    if (!token.trim()) nextErrors.token = "Paste the reset token from the email.";
+    if (newPassword.length < 6) nextErrors.password = "Use at least 6 characters.";
+    if (newPassword && newPassword !== confirmPassword) nextErrors.confirm = "Passwords do not match.";
+
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) return;
+
     setLoading(true);
     try {
       const res = await authApi.resetPassword({
@@ -64,7 +73,7 @@ export default function ResetPasswordScreen() {
         token: token.trim(),
         new_password: newPassword,
       });
-      show("success", "Password reset", res.message || "You can sign in now.", () =>
+      show("success", "Password reset", res.message || "You can sign in with your new password now.", () =>
         router.replace("/login")
       );
     } catch (err) {
@@ -75,52 +84,87 @@ export default function ResetPasswordScreen() {
   };
 
   return (
-    <AuthLayout
-      title="Reset password"
-      subtitle="Paste the User ID and token from your reset email."
-      showBack
-    >
-      <ScrollView keyboardShouldPersistTaps="handled">
-        <View style={s.card}>
-          <Text style={s.label}>Email</Text>
-          <TextInput
+    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+      <AuthLayout
+        title="Set a new password"
+        subtitle="Paste the user ID and token from your reset email, then choose a new password."
+        showBack
+        onBack={() => router.back()}
+      >
+        <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+          <Input
+            label="Email"
+            placeholder="you@example.com"
             value={email}
-            onChangeText={setEmail}
+            onChangeText={(text) => {
+              setEmail(text);
+              setErrors((prev) => ({ ...prev, email: undefined }));
+            }}
             autoCapitalize="none"
             keyboardType="email-address"
-            style={s.input}
+            error={errors.email}
+            required
           />
-          <Text style={s.label}>User ID (from email)</Text>
-          <TextInput value={uid} onChangeText={setUid} autoCapitalize="none" style={s.input} />
-          <Text style={s.label}>Reset token (from email)</Text>
-          <TextInput value={token} onChangeText={setToken} autoCapitalize="none" style={s.input} />
-          <Text style={s.label}>New password</Text>
-          <TextInput
+
+          <Input
+            label="User ID (from the email)"
+            placeholder="e.g. 42"
+            value={uid}
+            onChangeText={(text) => {
+              setUid(text);
+              setErrors((prev) => ({ ...prev, uid: undefined }));
+            }}
+            autoCapitalize="none"
+            error={errors.uid}
+            required
+          />
+
+          <Input
+            label="Reset token (from the email)"
+            placeholder="Paste the token"
+            value={token}
+            onChangeText={(text) => {
+              setToken(text);
+              setErrors((prev) => ({ ...prev, token: undefined }));
+            }}
+            autoCapitalize="none"
+            error={errors.token}
+            hint="Tokens are single use and expire quickly."
+            required
+          />
+
+          <PasswordInput
+            label="New password"
+            placeholder="At least 6 characters"
             value={newPassword}
-            onChangeText={setNewPassword}
-            secureTextEntry
-            style={s.input}
+            onChangeText={(text) => {
+              setNewPassword(text);
+              setErrors((prev) => ({ ...prev, password: undefined }));
+            }}
+            error={errors.password}
+            required
           />
-          <Text style={s.label}>Confirm password</Text>
-          <TextInput
+
+          <PasswordInput
+            label="Confirm new password"
+            placeholder="Repeat the new password"
             value={confirmPassword}
-            onChangeText={setConfirmPassword}
-            secureTextEntry
-            style={s.input}
+            onChangeText={(text) => {
+              setConfirmPassword(text);
+              setErrors((prev) => ({ ...prev, confirm: undefined }));
+            }}
+            error={errors.confirm}
+            required
           />
-          <TouchableOpacity
-            onPress={submit}
-            disabled={loading}
-            style={[s.button, loading && s.buttonDisabled]}
-          >
-            {loading ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={s.buttonText}>Reset password</Text>
-            )}
-          </TouchableOpacity>
-        </View>
-      </ScrollView>
+
+          <Button label="Reset password" size="lg" fullWidth loading={loading} onPress={submit} />
+
+          <View style={styles.footer}>
+            <Text style={styles.footerText}>Remembered it after all?</Text>
+            <Button label="Back to sign in" variant="ghost" size="sm" onPress={() => router.replace("/login")} />
+          </View>
+        </ScrollView>
+      </AuthLayout>
 
       <FeedbackModal
         visible={popup.visible}
@@ -130,6 +174,19 @@ export default function ResetPasswordScreen() {
         onClose={close}
         confirmLabel={popup.type === "success" ? "Sign in" : "OK"}
       />
-    </AuthLayout>
+    </KeyboardAvoidingView>
   );
 }
+
+const styles = StyleSheet.create({
+  flex: { flex: 1 },
+  footer: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.xs,
+    marginTop: spacing.md,
+    flexWrap: "wrap",
+  },
+  footerText: { color: colors.textMuted, fontSize: 13.5 },
+});

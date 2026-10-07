@@ -22,7 +22,11 @@ import AppRoutes from "./webRoutes";
 import Navbar from "./components/Navbar";
 import AuthGuard from "./auth/AuthGuard";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { __setImperativeNavigator } from "expo-router";
+// NOTE: the shim is imported by its own path on purpose. `expo-router` must
+// keep resolving to the real package for the Expo/Metro build (tsconfig
+// `paths` are honoured by Metro), while this browser entry — and every screen
+// it renders — goes through the Vite alias defined in `vite.config.js`.
+import { __setImperativeNavigator } from "./shims/expo-router";
 import { BACKGROUND } from "./theme/colors";
 
 import "./global.css";

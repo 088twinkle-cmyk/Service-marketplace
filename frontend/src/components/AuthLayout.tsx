@@ -1,151 +1,240 @@
+/**
+ * AuthLayout — the frame shared by login, register, OTP, forgot and reset.
+ *
+ * Desktop: brand panel on the left, form card on the right (split screen).
+ * Mobile: compact brand header with the form directly underneath, so the first
+ * input is reachable without scrolling.
+ */
 import React from "react";
-import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
-import { useRouter } from "expo-router";
-import {
-  PRIMARY,
-  BACKGROUND,
-  PRIMARY_LIGHT,
-  TEXT,
-  TEXT_MUTED,
-  CARD,
-  BORDER,
-  HERO_BG,
-} from "../theme/colors";
+import { Pressable, StyleSheet, Text, View } from "react-native";
+
 import { getApiBaseUrl } from "../config/api";
+import { colors, radius, shadows, spacing, typography, weight } from "../theme/tokens";
+import { useResponsive } from "../theme/responsive";
+import Icon from "./ui/Icon";
+import { Container } from "./ui/Layout";
 
 type Props = {
   title: string;
   subtitle: string;
   children: React.ReactNode;
   showBack?: boolean;
+  onBack?: () => void;
 };
 
-export default function AuthLayout({ title, subtitle, children, showBack }: Props) {
-  const router = useRouter();
+const HIGHLIGHTS = [
+  {
+    icon: "shield" as const,
+    title: "Verified professionals",
+    body: "Providers submit identity documents that our team reviews before they can publish services.",
+  },
+  {
+    icon: "calendar" as const,
+    title: "Availability you can trust",
+    body: "Pick a real time slot from a provider's calendar — no back-and-forth messages needed.",
+  },
+  {
+    icon: "wallet" as const,
+    title: "Prices that work for you",
+    body: "Every listing shows its starting price, and bookings keep the agreed amount on record.",
+  },
+];
+
+export default function AuthLayout({ title, subtitle, children, showBack, onBack }: Props) {
+  const { isDesktop, gutter } = useResponsive();
 
   return (
     <View style={styles.root}>
-      <View style={styles.header}>
-        {showBack ? (
-          <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-            <Text style={styles.backText}>← Back</Text>
-          </TouchableOpacity>
-        ) : null}
-        <View style={styles.brandRow}>
-          <View style={styles.logo}>
-            <Text style={styles.logoLetter}>S</Text>
+      <Container width="full" style={{ paddingHorizontal: gutter, flex: 1 }}>
+        <View style={[styles.split, isDesktop ? styles.splitRow : styles.splitColumn]}>
+          {/* Brand / trust panel */}
+          <View style={[styles.brandPanel, isDesktop ? styles.brandPanelDesktop : styles.brandPanelMobile]}>
+            <View style={styles.brandRow}>
+              <View style={styles.logo}>
+                <Text style={styles.logoLetter}>S</Text>
+              </View>
+              <Text style={styles.brand}>Service Marketplace</Text>
+            </View>
+
+            <Text style={[styles.brandHeadline, isDesktop ? styles.headlineDesktop : styles.headlineMobile]}>
+              Find trusted professionals.{"\n"}Book services at your price.
+            </Text>
+
+            {isDesktop ? (
+              <View style={styles.highlights}>
+                {HIGHLIGHTS.map((item) => (
+                  <View key={item.title} style={styles.highlight}>
+                    <View style={styles.highlightIcon}>
+                      <Icon name={item.icon} size={17} color={colors.primaryDark} />
+                    </View>
+                    <View style={styles.highlightText}>
+                      <Text style={styles.highlightTitle}>{item.title}</Text>
+                      <Text style={styles.highlightBody}>{item.body}</Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            ) : (
+              <Text style={styles.brandSub}>
+                Verified professionals · real availability · transparent prices
+              </Text>
+            )}
           </View>
-          <Text style={styles.brand}>Service Marketplace</Text>
+
+          {/* Form */}
+          <View style={[styles.formPanel, isDesktop ? styles.formPanelDesktop : styles.formPanelMobile]}>
+            <View style={styles.formInner}>
+              {showBack ? (
+                <Pressable
+                  onPress={onBack}
+                  accessibilityRole="button"
+                  accessibilityLabel="Go back"
+                  style={({ pressed }: { pressed: boolean }) => [styles.back, pressed && styles.pressed]}
+                >
+                  <Icon name="chevron-left" size={13} color={colors.textMuted} />
+                  <Text style={styles.backText}>Back</Text>
+                </Pressable>
+              ) : null}
+
+              <Text style={styles.title}>{title}</Text>
+              <Text style={styles.subtitle}>{subtitle}</Text>
+
+              {children}
+            </View>
+
+            <Text style={styles.apiHint} numberOfLines={1}>
+              API: {getApiBaseUrl()}
+            </Text>
+          </View>
         </View>
-        <Text style={styles.title}>{title}</Text>
-        <Text style={styles.subtitle}>{subtitle}</Text>
-      </View>
-      <View style={styles.body}>{children}</View>
-      <Text style={styles.apiHint} numberOfLines={1}>
-        API: {getApiBaseUrl()}
-      </Text>
+      </Container>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: BACKGROUND },
-  header: {
-    backgroundColor: PRIMARY_LIGHT,
-    paddingTop: 16,
-    paddingHorizontal: 24,
-    paddingBottom: 28,
-    borderBottomLeftRadius: 28,
-    borderBottomRightRadius: 28,
-    borderBottomWidth: 1,
-    borderColor: BORDER,
-  },
-  backBtn: { marginBottom: 12 },
-  backText: { color: PRIMARY, fontWeight: "600", fontSize: 15 },
-  brandRow: { flexDirection: "row", alignItems: "center", marginBottom: 20 },
-  logo: {
-    width: 42,
-    height: 42,
-    borderRadius: 12,
-    backgroundColor: PRIMARY,
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 12,
-  },
-  logoLetter: { color: "#fff", fontWeight: "800", fontSize: 20 },
-  brand: { fontSize: 17, fontWeight: "800", color: TEXT },
-  title: { fontSize: 28, fontWeight: "800", color: TEXT },
-  subtitle: { fontSize: 15, color: TEXT_MUTED, marginTop: 8, lineHeight: 22 },
-  body: { flex: 1, paddingHorizontal: 20, paddingTop: 24 },
-  apiHint: {
-    textAlign: "center",
-    fontSize: 10,
-    color: TEXT_MUTED,
-    paddingBottom: 12,
-    paddingHorizontal: 16,
-  },
-});
-
-export const authFormStyles = StyleSheet.create({
+/**
+ * Shared form styles. The redesigned auth screens use the `ui` components, but
+ * the style object is kept exported for compatibility with any screen still
+ * importing it.
+ */
+export const authFormStyles = {
   card: {
-    backgroundColor: CARD,
-    borderRadius: 20,
-    padding: 22,
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: BORDER,
-    shadowColor: PRIMARY,
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    elevation: 3,
+    borderColor: colors.border,
+    borderRadius: radius.xxl,
+    padding: spacing.xxl,
+    ...shadows.xs,
   },
-  label: { fontSize: 13, fontWeight: "600", color: TEXT, marginBottom: 6 },
+  label: { fontSize: 13, fontWeight: weight.semibold, color: colors.text, marginBottom: spacing.sm },
   input: {
-    backgroundColor: HERO_BG,
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: BORDER,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderRadius: 12,
+    borderColor: colors.borderStrong,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md + 2,
+    borderRadius: radius.md,
     fontSize: 15,
-    color: TEXT,
-    marginBottom: 14,
+    color: colors.text,
+    marginBottom: spacing.lg,
   },
-  inputFocused: { borderColor: PRIMARY },
+  inputFocused: { borderColor: colors.borderFocus },
   button: {
-    backgroundColor: PRIMARY,
-    paddingVertical: 16,
-    borderRadius: 14,
+    backgroundColor: colors.primary,
+    paddingVertical: spacing.lg,
+    borderRadius: radius.md,
     alignItems: "center",
-    marginTop: 8,
+    marginTop: spacing.sm,
+    ...shadows.primary,
   },
   buttonDisabled: { opacity: 0.65 },
-  buttonText: { color: "#fff", fontWeight: "700", fontSize: 16 },
-  linkRow: { marginTop: 20, alignItems: "center" },
-  link: { color: TEXT_MUTED, fontSize: 15 },
-  linkBold: { color: PRIMARY, fontWeight: "700" },
-  roleRow: {
-    flexDirection: "row",
-    marginBottom: 18,
-    gap: 10,
-  },
+  buttonText: { color: colors.textInverse, fontWeight: weight.bold, fontSize: 15 },
+  linkRow: { marginTop: spacing.lg, alignItems: "center" },
+  link: { color: colors.textMuted, fontSize: 14 },
+  linkBold: { color: colors.primary, fontWeight: weight.bold },
+  roleRow: { flexDirection: "row", marginBottom: spacing.lg, gap: spacing.sm },
   roleChip: {
     flex: 1,
-    paddingVertical: 12,
-    borderRadius: 12,
+    paddingVertical: spacing.md,
+    borderRadius: radius.md,
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: colors.borderStrong,
     alignItems: "center",
-    backgroundColor: HERO_BG,
+    backgroundColor: colors.surface,
   },
-  roleChipActive: { backgroundColor: PRIMARY, borderColor: PRIMARY },
-  roleText: { fontWeight: "700", color: TEXT_MUTED },
-  roleTextActive: { color: "#fff" },
-  stepRow: { flexDirection: "row", marginBottom: 20, gap: 8 },
-  step: {
-    flex: 1,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: BORDER,
+  roleChipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  roleText: { fontWeight: weight.semibold, color: colors.textMuted, fontSize: 14 },
+  roleTextActive: { color: colors.textInverse },
+  stepRow: { flexDirection: "row", marginBottom: spacing.lg, gap: spacing.sm },
+  step: { flex: 1, height: 4, borderRadius: 2, backgroundColor: colors.surfaceMuted },
+  stepActive: { backgroundColor: colors.primary },
+} as const;
+
+const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: colors.background, paddingVertical: spacing.xxl },
+  split: { flex: 1, gap: spacing.xxl },
+  splitRow: { flexDirection: "row", alignItems: "stretch" },
+  splitColumn: { flexDirection: "column" },
+
+  brandPanel: { justifyContent: "flex-start" },
+  brandPanelDesktop: { flex: 1, paddingVertical: spacing.giant, paddingRight: spacing.giant },
+  brandPanelMobile: { gap: spacing.md },
+  brandRow: { flexDirection: "row", alignItems: "center", gap: spacing.md, marginBottom: spacing.lg },
+  logo: {
+    width: 40,
+    height: 40,
+    borderRadius: radius.md,
+    backgroundColor: colors.primary,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  stepActive: { backgroundColor: PRIMARY },
+  logoLetter: { color: colors.textInverse, fontWeight: weight.extrabold, fontSize: 20 },
+  brand: { fontSize: 16, fontWeight: weight.bold, color: colors.text },
+  brandHeadline: { color: colors.text },
+  headlineDesktop: { ...typography.display, marginBottom: spacing.xxxl },
+  headlineMobile: { ...typography.h2, marginBottom: spacing.sm },
+  brandSub: { ...typography.small, color: colors.textMuted },
+
+  highlights: { gap: spacing.xl },
+  highlight: { flexDirection: "row", gap: spacing.md, alignItems: "flex-start" },
+  highlightIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: radius.md,
+    backgroundColor: colors.primarySoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  highlightText: { flex: 1 },
+  highlightTitle: { ...typography.bodyStrong, color: colors.text },
+  highlightBody: { ...typography.small, color: colors.textMuted, marginTop: 2 },
+
+  formPanel: { justifyContent: "center" },
+  formPanelDesktop: { flexBasis: 460, flexGrow: 0, flexShrink: 0 },
+  formPanelMobile: { flexGrow: 1 },
+  formInner: {
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.xxl,
+    padding: spacing.xxl,
+    ...shadows.sm,
+  },
+  back: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    alignSelf: "flex-start",
+    marginBottom: spacing.lg,
+  },
+  backText: { color: colors.textMuted, fontWeight: weight.semibold, fontSize: 13 },
+  pressed: { opacity: 0.7 },
+  title: { ...typography.h2, color: colors.text },
+  subtitle: { ...typography.small, color: colors.textMuted, marginTop: spacing.sm, marginBottom: spacing.xxl },
+  apiHint: {
+    textAlign: "center",
+    fontSize: 10.5,
+    color: colors.textSubtle,
+    marginTop: spacing.md,
+  },
 });

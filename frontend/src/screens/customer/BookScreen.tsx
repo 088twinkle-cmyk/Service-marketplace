@@ -1,36 +1,50 @@
-import React, { useEffect, useState, useMemo, useCallback } from "react";
-import {
-  View,
-  Text,
-  ScrollView,
-  TouchableOpacity,
-  StyleSheet,
-  ActivityIndicator,
-} from "react-native";
+/**
+ * BookScreen — customer booking flow.
+ *
+ * Step 1 · choose an available slot from the provider's calendar
+ * Step 2 · review the request and confirm it
+ *
+ * Everything else (price negotiation, payment and completion) happens on the
+ * booking itself and is explained in the "what happens next" rail, so the flow
+ * never promises something the backend does not support.
+ */
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { ScrollView, StyleSheet, Text, View } from "react-native";
+
 import axios from "axios";
-import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import Animated, { FadeInDown } from "react-native-reanimated";
+import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
+
 import BookingCalendar from "../../components/BookingCalendar";
 import FeedbackModal, { type FeedbackType } from "../../components/FeedbackModal";
+import Badge from "../../components/ui/Badge";
+import Button from "../../components/ui/Button";
+import Card, { Divider } from "../../components/ui/Card";
+import Icon from "../../components/ui/Icon";
+import { Container, StepTrail } from "../../components/ui/Layout";
+import PageHeader from "../../components/ui/PageHeader";
+import { EmptyState } from "../../components/ui/States";
+import { SkeletonBlock } from "../../components/ui/Skeleton";
 import { bookingsApi, type AvailabilitySlot } from "../../services/api/bookingsApi";
 import { getApiErrorMessage } from "../../services/api/client";
 import { getAuth } from "../../auth/auth";
-import {
-  BACKGROUND,
-  CARD,
-  TEXT,
-  TEXT_MUTED,
-  BORDER,
-  PRIMARY,
-  SUCCESS,
-  TAG_BG,
-  PRIMARY_LIGHT,
-} from "../../theme/colors";
+import { colors, radius, spacing, typography, weight } from "../../theme/tokens";
+import { useResponsive } from "../../theme/responsive";
 
 type Step = 1 | 2;
 
+const FLOW_LIFECYCLE = [
+  "Request sent",
+  "Provider confirms",
+  "Price agreed",
+  "Payment",
+  "Service delivered",
+  "Completed & reviewed",
+];
+
 export default function BookScreen() {
   const router = useRouter();
+  const { isDesktop } = useResponsive();
   const params = useLocalSearchParams<{
     serviceId?: string;
     title?: string;
@@ -60,7 +74,7 @@ export default function BookScreen() {
   );
 
   const missingParams = !params.serviceId || !params.providerId;
-  const priceNum = params.price ? parseFloat(params.price) : 0;
+  const priceNum = params.price ? Number.parseFloat(params.price) : 0;
 
   useEffect(() => {
     (async () => {
@@ -76,6 +90,19 @@ export default function BookScreen() {
     })();
   }, [router, params.provider]);
 
+  const showPopup = (
+    type: FeedbackType,
+    title: string,
+    message: string,
+    onConfirm?: () => void
+  ) => setPopup({ visible: true, type, title, message, onConfirm });
+
+  const closePopup = () => {
+    const cb = popup.onConfirm;
+    setPopup((p) => ({ ...p, visible: false, onConfirm: undefined }));
+    cb?.();
+  };
+
   const loadSlots = useCallback(async () => {
     if (!params.serviceId || !params.providerId) {
       setLoading(false);
@@ -90,7 +117,7 @@ export default function BookScreen() {
       });
       setSlots(data);
     } catch (err) {
-      // If backend requires auth (or token is stale), show a friendly message.
+      // If the backend requires auth (or the token is stale), show a friendly message.
       if (axios.isAxiosError(err) && err.response?.status === 401) {
         showPopup("info", "Sign in required", "Please sign in to view availability.", () =>
           router.push("/login")
@@ -103,6 +130,7 @@ export default function BookScreen() {
     } finally {
       setLoading(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [monthKey, params.serviceId, params.providerId]);
 
   useEffect(() => {
@@ -112,21 +140,9 @@ export default function BookScreen() {
   useFocusEffect(
     useCallback(() => {
       loadSlots();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [loadSlots])
   );
-
-  const showPopup = (
-    type: FeedbackType,
-    title: string,
-    message: string,
-    onConfirm?: () => void
-  ) => setPopup({ visible: true, type, title, message, onConfirm });
-
-  const closePopup = () => {
-    const cb = popup.onConfirm;
-    setPopup((p) => ({ ...p, visible: false, onConfirm: undefined }));
-    cb?.();
-  };
 
   const onSelectSlot = (slot: AvailabilitySlot) => {
     if (slot.status !== "available") return;
@@ -159,8 +175,8 @@ export default function BookScreen() {
       });
       showPopup(
         "success",
-        "Booking confirmed",
-        "Your booking request is now pending. Track status in My Account → dashboard.",
+        "Booking request sent",
+        "Your request is pending until the provider confirms it. You can follow every status change from your dashboard.",
         () => router.replace("/dashboard")
       );
       setSelectedSlot(null);
@@ -173,7 +189,11 @@ export default function BookScreen() {
         return;
       }
       if (axios.isAxiosError(err) && err.response?.status === 403) {
-        showPopup("error", "Booking not allowed", getApiErrorMessage(err, "You cannot book this listing."));
+        showPopup(
+          "error",
+          "Booking not allowed",
+          getApiErrorMessage(err, "You cannot book this listing.")
+        );
         return;
       }
       showPopup("error", "Booking failed", getApiErrorMessage(err, "Try another slot."));
@@ -185,113 +205,163 @@ export default function BookScreen() {
 
   if (missingParams) {
     return (
-      <View style={styles.center}>
-        <Text style={styles.errTitle}>Booking unavailable</Text>
-        <Text style={styles.errText}>Open a service and tap Continue to book.</Text>
-        <TouchableOpacity style={styles.btn} onPress={() => router.replace("/")}>
-          <Text style={styles.btnText}>Browse services</Text>
-        </TouchableOpacity>
-      </View>
+      <Container style={styles.content}>
+        <EmptyState
+          icon="calendar"
+          title="Booking unavailable"
+          description="Open a service from the marketplace and choose “Continue to booking” to pick a time slot."
+          actionLabel="Browse services"
+          onAction={() => router.replace("/")}
+        />
+      </Container>
     );
   }
 
+  const summary = (
+    <Card padding="lg" style={styles.summaryCard}>
+      <Text style={styles.summaryEyebrow}>Booking request</Text>
+      <Text style={styles.summaryTitle}>{params.title}</Text>
+
+      <View style={styles.summaryRows}>
+        <SummaryRow label="Provider" value={params.provider || "—"} />
+        <SummaryRow
+          label="Date & time"
+          value={
+            selectedSlot
+              ? `${selectedSlot.date} · ${selectedSlot.start_time.slice(0, 5)}–${selectedSlot.end_time.slice(0, 5)}`
+              : "Not selected yet"
+          }
+        />
+        <SummaryRow
+          label="Starting price"
+          value={Number.isFinite(priceNum) && priceNum > 0 ? `Rs ${priceNum.toFixed(0)}` : "—"}
+          bold
+        />
+      </View>
+
+      <Badge
+        label={selectedSlot ? "Slot selected" : "Choose a slot"}
+        tone={selectedSlot ? "success" : "warning"}
+        icon={selectedSlot ? "check" : "clock"}
+      />
+
+      <Divider style={{ marginVertical: spacing.lg }} />
+
+      <Button
+        label={step === 1 ? "Continue to review" : "Confirm booking request"}
+        size="lg"
+        fullWidth
+        trailingIcon="arrow-right"
+        loading={booking}
+        disabled={step === 1 && !selectedSlot}
+        onPress={step === 1 ? goToConfirm : confirmBooking}
+      />
+
+      {step === 2 ? (
+        <Button
+          label="Change slot"
+          variant="ghost"
+          size="sm"
+          fullWidth
+          style={{ marginTop: spacing.sm }}
+          onPress={() => setStep(1)}
+        />
+      ) : null}
+
+      <View style={styles.lifecycle}>
+        <Text style={styles.lifecycleTitle}>What happens next</Text>
+        {FLOW_LIFECYCLE.map((label, index) => (
+          <View key={label} style={styles.lifecycleRow}>
+            <View style={styles.lifecycleDot}>
+              <Text style={styles.lifecycleDotText}>{index + 1}</Text>
+            </View>
+            <Text style={styles.lifecycleText}>{label}</Text>
+          </View>
+        ))}
+      </View>
+    </Card>
+  );
+
   return (
     <View style={styles.screen}>
-      <ScrollView contentContainerStyle={styles.content}>
-        <Animated.View entering={FadeInDown.duration(400)}>
-          <View style={styles.steps}>
-            <StepPill n={1} label="Pick slot" active={step >= 1} done={step > 1} />
-            <View style={styles.stepLine} />
-            <StepPill n={2} label="Confirm" active={step >= 2} done={false} />
+      <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+        <Container style={styles.content}>
+          <PageHeader
+            eyebrow="Booking"
+            title="Choose a time that works"
+            subtitle="Availability comes straight from the provider's calendar — green days have open slots."
+            onBack={() => router.back()}
+          />
+
+          <View style={styles.stepsWrap}>
+            <StepTrail steps={["Choose a slot", "Review request", "Provider confirms"]} current={step - 1} />
           </View>
 
-          <View style={styles.summary}>
-            <Text style={styles.title}>{params.title}</Text>
-            <Text style={styles.meta}>Provider: {params.provider}</Text>
-            {params.price ? (
-              <Text style={styles.price}>Rs {priceNum.toFixed(0)}</Text>
-            ) : null}
-          </View>
-
-          {step === 1 ? (
-            <>
-              <Text style={styles.h2}>Choose date & time</Text>
-              <Text style={styles.hint}>Green slots are available for booking.</Text>
+          <Animated.View
+            entering={FadeInDown.duration(400)}
+            style={[styles.layout, isDesktop ? styles.layoutDesktop : null]}
+          >
+            <View style={styles.main}>
               {loading ? (
-                <ActivityIndicator color={PRIMARY} style={{ marginVertical: 24 }} />
+                <View style={styles.skeletonWrap}>
+                  <SkeletonBlock height={340} radiusValue={radius.xl} />
+                </View>
               ) : (
                 <BookingCalendar
                   month={month}
                   slots={slots}
                   selectedDate={selectedDate}
-                  onSelectDate={(d) => {
-                    setSelectedDate(d);
+                  onSelectDate={(date) => {
+                    setSelectedDate(date);
                     setSelectedSlot(null);
                   }}
-                  onChangeMonth={(d) =>
-                    setMonth(new Date(month.getFullYear(), month.getMonth() + d, 1))
+                  onChangeMonth={(delta) =>
+                    setMonth(new Date(month.getFullYear(), month.getMonth() + delta, 1))
                   }
-                onToggleSlot={onSelectSlot}
-                selectedSlotId={selectedSlot?.id}
-                bookingMode
+                  onToggleSlot={onSelectSlot}
+                  selectedSlotId={selectedSlot?.id}
+                  bookingMode
                 />
               )}
-              {selectedSlot ? (
-                <View style={styles.selected}>
-                  <Text style={styles.selectedText}>
-                    {selectedSlot.date} · {selectedSlot.start_time.slice(0, 5)} –{" "}
-                    {selectedSlot.end_time.slice(0, 5)}
+
+              {!loading && slots.length === 0 ? (
+                <View style={styles.emptyNotice}>
+                  <Icon name="info" size={16} color={colors.primary} />
+                  <Text style={styles.emptyNoticeText}>
+                    No slots are published for this month yet. Try the next month, or check back
+                    once the provider updates their calendar.
                   </Text>
                 </View>
               ) : null}
-            </>
-          ) : (
-            <>
-              <Text style={styles.h2}>Review & confirm</Text>
-              <View style={styles.reviewCard}>
-                <Row label="Service" value={params.title || ""} />
-                <Row label="Provider" value={params.provider || ""} />
-                <Row
-                  label="Date & time"
-                  value={
-                    selectedSlot
-                      ? `${selectedSlot.date} ${selectedSlot.start_time.slice(0, 5)}`
-                      : "—"
-                  }
-                />
-                <Row label="Total" value={`Rs ${priceNum.toFixed(0)}`} bold />
-              </View>
-              <TouchableOpacity style={styles.backLink} onPress={() => setStep(1)}>
-                <Text style={styles.backLinkText}>← Change slot</Text>
-              </TouchableOpacity>
-            </>
-          )}
-        </Animated.View>
+            </View>
+
+            <View style={[styles.rail, isDesktop ? styles.railDesktop : null]}>{summary}</View>
+          </Animated.View>
+        </Container>
       </ScrollView>
 
-      <View style={styles.footer}>
-        {step === 1 ? (
-          <TouchableOpacity
-            style={[styles.btn, !selectedSlot && styles.btnDisabled]}
-            disabled={!selectedSlot}
-            onPress={goToConfirm}
-          >
-            <Text style={styles.btnText}>Continue to review</Text>
-          </TouchableOpacity>
-        ) : (
-          <TouchableOpacity
-            style={[styles.btn, booking && styles.btnDisabled]}
-            disabled={booking}
-            onPress={confirmBooking}
-          >
-            {booking ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={styles.btnText}>Confirm booking</Text>
-            )}
-          </TouchableOpacity>
-        )}
-      </View>
+      {/* Mobile sticky action */}
+      {!isDesktop ? (
+        <View style={styles.stickyBar}>
+          <View style={styles.stickyInfo}>
+            <Text style={styles.stickyLabel}>
+              {selectedSlot ? selectedSlot.date : "No slot selected"}
+            </Text>
+            <Text style={styles.stickyValue}>
+              {selectedSlot
+                ? `${selectedSlot.start_time.slice(0, 5)}–${selectedSlot.end_time.slice(0, 5)}`
+                : "Pick a date above"}
+            </Text>
+          </View>
+          <Button
+            label={step === 1 ? "Continue" : "Confirm"}
+            size="lg"
+            loading={booking}
+            disabled={step === 1 && !selectedSlot}
+            onPress={step === 1 ? goToConfirm : confirmBooking}
+          />
+        </View>
+      ) : null}
 
       <FeedbackModal
         visible={popup.visible}
@@ -305,120 +375,79 @@ export default function BookScreen() {
   );
 }
 
-function StepPill({
-  n,
-  label,
-  active,
-  done,
-}: {
-  n: number;
-  label: string;
-  active: boolean;
-  done: boolean;
-}) {
+function SummaryRow({ label, value, bold }: { label: string; value: string; bold?: boolean }) {
   return (
-    <View style={styles.pillWrap}>
-      <View style={[styles.pill, active && styles.pillActive, done && styles.pillDone]}>
-        <Text style={[styles.pillNum, active && styles.pillNumActive]}>{done ? "✓" : n}</Text>
-      </View>
-      <Text style={styles.pillLabel}>{label}</Text>
-    </View>
-  );
-}
-
-function Row({ label, value, bold }: { label: string; value: string; bold?: boolean }) {
-  return (
-    <View style={styles.row}>
-      <Text style={styles.rowLabel}>{label}</Text>
-      <Text style={[styles.rowValue, bold && styles.rowBold]}>{value}</Text>
+    <View style={styles.summaryRow}>
+      <Text style={styles.summaryLabel}>{label}</Text>
+      <Text style={[styles.summaryValue, bold ? styles.summaryValueBold : null]} numberOfLines={2}>
+        {value}
+      </Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: BACKGROUND },
-  content: { padding: 16, paddingBottom: 24 },
-  center: {
-    flex: 1,
-    justifyContent: "center",
+  screen: { flex: 1, backgroundColor: colors.background },
+  content: { paddingTop: spacing.xl, paddingBottom: spacing.giant },
+  stepsWrap: { marginBottom: spacing.xxl },
+  layout: { gap: spacing.xxl },
+  layoutDesktop: { flexDirection: "row", alignItems: "flex-start" },
+  main: { flex: 1, gap: spacing.lg },
+  rail: { width: "100%" },
+  railDesktop: { width: 380, flexShrink: 0 },
+  skeletonWrap: { width: "100%" },
+
+  summaryCard: { gap: spacing.md },
+  summaryEyebrow: {
+    ...typography.label,
+    color: colors.primary,
+    textTransform: "uppercase",
+  },
+  summaryTitle: { ...typography.h3, color: colors.text },
+  summaryRows: { gap: spacing.sm, marginTop: spacing.xs },
+  summaryRow: { flexDirection: "row", justifyContent: "space-between", gap: spacing.md },
+  summaryLabel: { ...typography.small, color: colors.textMuted },
+  summaryValue: { ...typography.smallStrong, color: colors.text, flexShrink: 1, textAlign: "right" },
+  summaryValueBold: { ...typography.bodyStrong, color: colors.text },
+
+  lifecycle: { marginTop: spacing.xxl, gap: spacing.sm },
+  lifecycleTitle: { ...typography.caption, color: colors.textSubtle, textTransform: "uppercase" },
+  lifecycleRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  lifecycleDot: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: colors.primarySoft,
     alignItems: "center",
-    padding: 24,
-    backgroundColor: BACKGROUND,
-  },
-  errTitle: { fontSize: 20, fontWeight: "700", color: TEXT, marginBottom: 8 },
-  errText: { color: TEXT_MUTED, textAlign: "center", marginBottom: 20 },
-  steps: { flexDirection: "row", alignItems: "center", marginBottom: 20 },
-  stepLine: { flex: 1, height: 2, backgroundColor: BORDER, marginHorizontal: 8 },
-  pillWrap: { alignItems: "center", width: 72 },
-  pill: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: TAG_BG,
-    borderWidth: 2,
-    borderColor: BORDER,
-    alignItems: "center",
     justifyContent: "center",
   },
-  pillActive: { borderColor: PRIMARY, backgroundColor: PRIMARY_LIGHT },
-  pillDone: { backgroundColor: SUCCESS, borderColor: SUCCESS },
-  pillNum: { fontWeight: "800", color: TEXT_MUTED, fontSize: 14 },
-  pillNumActive: { color: PRIMARY },
-  pillLabel: { fontSize: 11, color: TEXT_MUTED, marginTop: 6, fontWeight: "600" },
-  summary: {
-    backgroundColor: CARD,
-    padding: 16,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: BORDER,
-    marginBottom: 20,
-  },
-  title: { fontSize: 18, fontWeight: "700", color: TEXT },
-  meta: { color: TEXT_MUTED, marginTop: 6, fontSize: 14 },
-  price: { fontSize: 22, fontWeight: "800", color: TEXT, marginTop: 10 },
-  h2: { fontSize: 17, fontWeight: "700", color: TEXT, marginBottom: 6 },
-  hint: { color: TEXT_MUTED, marginBottom: 12, fontSize: 13 },
-  selected: {
-    marginTop: 12,
-    padding: 12,
-    backgroundColor: "#ECFDF5",
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: SUCCESS,
-  },
-  selectedText: { color: TEXT, fontWeight: "600" },
-  reviewCard: {
-    backgroundColor: CARD,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: BORDER,
-    padding: 16,
-    marginTop: 8,
-  },
-  row: {
+  lifecycleDotText: { fontSize: 10.5, fontWeight: weight.bold, color: colors.primaryDark },
+  lifecycleText: { ...typography.small, color: colors.textMuted },
+
+  emptyNotice: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: BORDER,
+    gap: spacing.sm,
+    alignItems: "flex-start",
+    padding: spacing.md,
+    borderRadius: radius.md,
+    backgroundColor: colors.primarySoft,
+    borderWidth: 1,
+    borderColor: colors.primarySoftBorder,
   },
-  rowLabel: { color: TEXT_MUTED, fontSize: 14 },
-  rowValue: { color: TEXT, fontSize: 14, fontWeight: "600", maxWidth: "60%", textAlign: "right" },
-  rowBold: { fontSize: 16, fontWeight: "800" },
-  backLink: { marginTop: 16 },
-  backLinkText: { color: PRIMARY, fontWeight: "700" },
-  footer: {
-    padding: 16,
-    borderTopWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: CARD,
-  },
-  btn: {
-    backgroundColor: PRIMARY,
-    paddingVertical: 16,
-    borderRadius: 8,
+  emptyNoticeText: { flex: 1, ...typography.small, color: colors.primaryDark },
+
+  stickyBar: {
+    flexDirection: "row",
     alignItems: "center",
+    justifyContent: "space-between",
+    gap: spacing.lg,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    backgroundColor: colors.surface,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
   },
-  btnDisabled: { opacity: 0.5 },
-  btnText: { color: "#fff", fontWeight: "700", fontSize: 16 },
+  stickyInfo: { flexShrink: 1 },
+  stickyLabel: { fontSize: 11, color: colors.textSubtle, textTransform: "uppercase", letterSpacing: 0.5 },
+  stickyValue: { ...typography.bodyStrong, color: colors.text },
 });

@@ -1,216 +1,135 @@
+/**
+ * ServiceListing — the responsive grid of service cards plus its loading,
+ * empty and error states. Used by home, search and provider-owned listings.
+ */
 import React from "react";
-
-import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
-
-import GigCard from "./GigCard";
-
-import ServiceListSkeleton from "./ServiceListSkeleton";
+import { StyleSheet, Text, View } from "react-native";
 
 import type { ServiceItem } from "../services/api/servicesApi";
-
-import { PRIMARY, TEXT, TEXT_MUTED, CARD, BORDER } from "../theme/colors";
-
-
+import { colors, spacing, typography, weight } from "../theme/tokens";
+import ServiceCard from "./ServiceCard";
+import { EmptyState, ErrorState } from "./ui/States";
+import { ServiceGridSkeleton } from "./ui/Skeleton";
+import { Grid } from "./ui/Layout";
 
 type Props = {
-
   services: ServiceItem[];
-
   loading: boolean;
-
   error: string | null;
-
-  searchQuery: string;
-
+  searchQuery?: string;
   onBook: (service: ServiceItem) => void;
-
   onRetry: () => void;
-
   title?: string;
-
+  /** Rendered right of the title (sort selector, result count…). */
+  headerAction?: React.ReactNode;
+  /** Hide the built-in heading when the parent already renders one. */
+  hideHeading?: boolean;
+  emptyTitle?: string;
+  emptyDescription?: string;
+  emptyActionLabel?: string;
+  onEmptyAction?: () => void;
+  /** Optional per-service footer label (e.g. "Manage listing"). */
+  footerNoteFor?: (service: ServiceItem) => string | undefined;
 };
 
-
-
 export default function ServiceListing({
-
   services,
-
   loading,
-
   error,
-
-  searchQuery,
-
+  searchQuery = "",
   onBook,
-
   onRetry,
-
   title = "Services you may like",
-
+  headerAction,
+  hideHeading,
+  emptyTitle,
+  emptyDescription,
+  emptyActionLabel,
+  onEmptyAction,
+  footerNoteFor,
 }: Props) {
-
   if (loading) {
-
     return (
-
-      <View style={styles.outer}>
-
-        <ServiceListSkeleton />
-
+      <View style={styles.wrap}>
+        {!hideHeading ? <Text style={styles.heading}>{title}</Text> : null}
+        <ServiceGridSkeleton count={6} />
       </View>
-
     );
-
   }
-
-
 
   if (error && services.length === 0) {
-
     return (
-
-      <View style={styles.outer}>
-
-        <View style={styles.container}>
-
-          <Text style={styles.emptyText}>{error}</Text>
-
-          <TouchableOpacity style={styles.retryBtn} onPress={onRetry}>
-
-            <Text style={styles.retryText}>Try again</Text>
-
-          </TouchableOpacity>
-
-        </View>
-
+      <View style={styles.wrap}>
+        {!hideHeading ? <Text style={styles.heading}>{title}</Text> : null}
+        <ErrorState
+          title="We could not load services"
+          description={error}
+          onRetry={onRetry}
+        />
       </View>
-
     );
-
   }
-
-
 
   if (services.length === 0) {
-
     return (
-
-      <View style={styles.outer}>
-
-        <View style={styles.container}>
-
-          <Text style={styles.emptyTitle}>No services found</Text>
-
-          <Text style={styles.emptyText}>
-
-            {searchQuery.trim()
-
-              ? `No results for "${searchQuery}". Try another keyword or city.`
-
-              : "No listings in this area yet. Pull to refresh."}
-
-          </Text>
-
-        </View>
-
+      <View style={styles.wrap}>
+        {!hideHeading ? <Text style={styles.heading}>{title}</Text> : null}
+        <EmptyState
+          icon="search"
+          title={emptyTitle ?? (searchQuery.trim() ? "No services match your search" : "No services here yet")}
+          description={
+            emptyDescription ??
+            (searchQuery.trim()
+              ? `We could not find anything for “${searchQuery.trim()}”. Try a different keyword or another city.`
+              : "Nothing is listed in this area right now. Try another city, or pull to refresh in a moment.")
+          }
+          actionLabel={emptyActionLabel ?? (searchQuery.trim() ? "Clear search" : undefined)}
+          onAction={onEmptyAction}
+        />
       </View>
-
     );
-
   }
 
-
-
   return (
+    <View style={styles.wrap}>
+      {!hideHeading ? (
+        <View style={styles.header}>
+          <View style={styles.headerText}>
+            <Text style={styles.heading}>{title}</Text>
+            <Text style={styles.count}>
+              {services.length} {services.length === 1 ? "service" : "services"} available
+            </Text>
+          </View>
+          {headerAction}
+        </View>
+      ) : null}
 
-    <View style={styles.outer}>
-
-      <View style={styles.header}>
-
-        <Text style={styles.sectionTitle}>
-
-          {title} ({services.length})
-
-        </Text>
-
-        <Text style={styles.sortHint}>Sorted by nearest location</Text>
-
-      </View>
-
-      <View style={styles.container}>
-
+      <Grid>
         {services.map((item, index) => (
-
-          <GigCard
-
+          <ServiceCard
             key={item.id}
-
             service={item}
-
-            onPress={() => onBook(item)}
-
             index={index}
-
+            onPress={() => onBook(item)}
+            footerNote={footerNoteFor?.(item)}
           />
-
         ))}
-
-      </View>
-
+      </Grid>
     </View>
-
   );
-
 }
 
-
-
 const styles = StyleSheet.create({
-
-  outer: { paddingHorizontal: 16, marginTop: 20, paddingBottom: 8 },
-
-  header: { marginBottom: 12 },
-
-  sectionTitle: { fontSize: 18, fontWeight: "800", color: TEXT, marginBottom: 4 },
-
-  sortHint: { fontSize: 13, color: TEXT_MUTED },
-
-  container: {
-
-    backgroundColor: CARD,
-
-    borderRadius: 12,
-
-    borderWidth: 1,
-
-    borderColor: BORDER,
-
-    padding: 12,
-
+  wrap: { width: "100%" },
+  header: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    justifyContent: "space-between",
+    gap: spacing.lg,
+    marginBottom: spacing.lg,
+    flexWrap: "wrap",
   },
-
-  emptyTitle: { fontSize: 17, fontWeight: "700", color: TEXT, marginBottom: 8, textAlign: "center" },
-
-  emptyText: { color: TEXT_MUTED, textAlign: "center", lineHeight: 22, padding: 8 },
-
-  retryBtn: {
-
-    marginTop: 12,
-
-    backgroundColor: PRIMARY,
-
-    paddingHorizontal: 20,
-
-    paddingVertical: 12,
-
-    borderRadius: 8,
-
-    alignSelf: "center",
-
-  },
-
-  retryText: { color: "#fff", fontWeight: "700" },
-
+  headerText: { flex: 1, minWidth: 200 },
+  heading: { ...typography.h3, color: colors.text },
+  count: { ...typography.small, color: colors.textMuted, marginTop: 2, fontWeight: weight.medium },
 });
-

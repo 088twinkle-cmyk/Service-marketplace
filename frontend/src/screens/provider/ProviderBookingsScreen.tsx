@@ -1,28 +1,51 @@
-import React, { useCallback, useEffect, useState } from "react";
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  ActivityIndicator,
-  RefreshControl,
-} from "react-native";
+/**
+ * ProviderBookingsScreen — incoming booking requests and their lifecycle.
+ *
+ * Same API calls as before (list, accept, reject, cancel, chat) with status
+ * filters, clear per-booking actions and honest empty/loading/error states.
+ */
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
+
 import axios from "axios";
-import { useRouter } from "expo-router";
 import Animated, { FadeInDown } from "react-native-reanimated";
-import ScreenShell from "../../components/ScreenShell";
+import { useRouter } from "expo-router";
+
 import FeedbackModal, { type FeedbackType } from "../../components/FeedbackModal";
+import Button from "../../components/ui/Button";
+import Card from "../../components/ui/Card";
+import Icon from "../../components/ui/Icon";
+import { Chip, Container, StatCard } from "../../components/ui/Layout";
+import PageHeader from "../../components/ui/PageHeader";
+import { EmptyState, ErrorState } from "../../components/ui/States";
+import { ListSkeleton } from "../../components/ui/Skeleton";
+import { StatusBadge } from "../../components/ui/Badge";
 import { bookingsApi, type BookingItem } from "../../services/api/bookingsApi";
 import { getApiErrorMessage } from "../../services/api/client";
 import { getAuth, logout } from "../../auth/auth";
 import { canCancelBooking } from "../../utils/bookingHelpers";
-import { CARD, TEXT, TEXT_MUTED, BORDER, PRIMARY } from "../../theme/colors";
+import { colors, radius, spacing, typography, weight } from "../../theme/tokens";
+import { useResponsive } from "../../theme/responsive";
+
+type FilterKey = "all" | "pending" | "active" | "completed" | "closed";
+
+const FILTERS: { key: FilterKey; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "pending", label: "Pending" },
+  { key: "active", label: "Confirmed" },
+  { key: "completed", label: "Completed" },
+  { key: "closed", label: "Cancelled" },
+];
 
 export default function ProviderBookingsScreen() {
   const router = useRouter();
+  const { isDesktop } = useResponsive();
+
   const [bookings, setBookings] = useState<BookingItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState<FilterKey>("all");
   const [cancellingId, setCancellingId] = useState<number | null>(null);
   const [acceptingId, setAcceptingId] = useState<number | null>(null);
   const [rejectingId, setRejectingId] = useState<number | null>(null);
@@ -39,6 +62,8 @@ export default function ProviderBookingsScreen() {
       router.replace("/login");
       return;
     }
+
+    setError(null);
     try {
       const data = await bookingsApi.listBookings();
       setBookings(data);
@@ -48,6 +73,7 @@ export default function ProviderBookingsScreen() {
         router.replace("/login");
         return;
       }
+      setError(getApiErrorMessage(err, "We could not load your bookings."));
       setBookings([]);
     } finally {
       setLoading(false);
@@ -59,24 +85,17 @@ export default function ProviderBookingsScreen() {
     load();
   }, [load]);
 
+  const notify = (type: FeedbackType, title: string, message: string) =>
+    setPopup({ visible: true, type, title, message });
+
   const cancel = async (id: number) => {
     setCancellingId(id);
     try {
       await bookingsApi.cancelBooking(id);
-      setPopup({
-        visible: true,
-        type: "success",
-        title: "Booking cancelled",
-        message: "The calendar slot is available again.",
-      });
+      notify("success", "Booking cancelled", "The calendar slot is available again.");
       await load();
     } catch (err) {
-      setPopup({
-        visible: true,
-        type: "error",
-        title: "Cancel failed",
-        message: getApiErrorMessage(err, "Could not cancel booking."),
-      });
+      notify("error", "Cancel failed", getApiErrorMessage(err, "Could not cancel booking."));
     } finally {
       setCancellingId(null);
     }
@@ -86,20 +105,10 @@ export default function ProviderBookingsScreen() {
     setAcceptingId(id);
     try {
       await bookingsApi.acceptBooking(id);
-      setPopup({
-        visible: true,
-        type: "success",
-        title: "Booking accepted",
-        message: "Customer has been notified by email.",
-      });
+      notify("success", "Booking accepted", "The customer has been notified by email.");
       await load();
     } catch (err) {
-      setPopup({
-        visible: true,
-        type: "error",
-        title: "Accept failed",
-        message: getApiErrorMessage(err, "Could not accept booking."),
-      });
+      notify("error", "Accept failed", getApiErrorMessage(err, "Could not accept booking."));
     } finally {
       setAcceptingId(null);
     }
@@ -109,112 +118,233 @@ export default function ProviderBookingsScreen() {
     setRejectingId(id);
     try {
       await bookingsApi.rejectBooking(id);
-      setPopup({
-        visible: true,
-        type: "success",
-        title: "Booking rejected",
-        message: "Booking was cancelled and customer has been notified by email.",
-      });
+      notify("success", "Booking rejected", "The booking was cancelled and the customer notified.");
       await load();
     } catch (err) {
-      setPopup({
-        visible: true,
-        type: "error",
-        title: "Reject failed",
-        message: getApiErrorMessage(err, "Could not reject booking."),
-      });
+      notify("error", "Reject failed", getApiErrorMessage(err, "Could not reject booking."));
     } finally {
       setRejectingId(null);
     }
   };
 
+  const counts = useMemo(() => {
+    const pending = bookings.filter((b) => b.status === "pending" || b.status === "offers");
+    const active = bookings.filter((b) =>
+      ["confirmed", "in_progress", "agreed", "payment_pending", "deliverable_submitted"].includes(
+        b.status
+      )
+    );
+    const completed = bookings.filter((b) => b.status === "completed" || b.status === "reviewed");
+    const closed = bookings.filter((b) =>
+      ["cancelled", "rejected", "expired"].includes(b.status)
+    );
+    return { pending, active, completed, closed };
+  }, [bookings]);
+
+  const visible = useMemo(() => {
+    if (filter === "pending") return counts.pending;
+    if (filter === "active") return counts.active;
+    if (filter === "completed") return counts.completed;
+    if (filter === "closed") return counts.closed;
+    return bookings;
+  }, [filter, bookings, counts]);
+
   return (
-    <ScreenShell
-      showBack
-      step="Provider"
-      title="Your bookings"
-      subtitle="Cancel a booking to release the date on your calendar."
-    >
-      {loading ? (
-        <ActivityIndicator color={PRIMARY} style={{ marginTop: 24 }} />
-      ) : bookings.length === 0 ? (
-        <Text style={styles.empty}>No bookings yet.</Text>
-      ) : (
-        bookings.map((b, i) => (
-          <Animated.View
-            key={b.id}
-            entering={FadeInDown.delay(i * 60).duration(350)}
-            style={styles.card}
-          >
-            <Text style={styles.service}>{b.service_title || `Service #${b.service}`}</Text>
-            <Text style={styles.meta}>
-              {b.booking_time
-                ? new Date(b.booking_time).toLocaleString()
-                : "Time pending"}
-            </Text>
-            <View style={styles.row}>
-              <View
-                style={[
-                  styles.badge,
-                  b.status === "cancelled" && styles.badgeCancelled,
-                  b.status === "confirmed" && styles.badgeConfirmed,
-                ]}
-              >
-                <Text style={styles.badgeText}>{b.status}</Text>
-              </View>
-              {b.status === "pending" ? (
-                <View style={styles.pendingActions}>
-                  <TouchableOpacity
-                    style={styles.acceptBtn}
-                    disabled={acceptingId === b.id}
-                    onPress={() => accept(b.id)}
-                  >
-                    {acceptingId === b.id ? (
-                      <ActivityIndicator color={PRIMARY} size="small" />
-                    ) : (
-                      <Text style={styles.acceptText}>Accept</Text>
-                    )}
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.rejectBtn}
-                    disabled={rejectingId === b.id}
-                    onPress={() => reject(b.id)}
-                  >
-                    {rejectingId === b.id ? (
-                      <ActivityIndicator color="#B91C1C" size="small" />
-                    ) : (
-                      <Text style={styles.rejectText}>Reject</Text>
-                    )}
-                  </TouchableOpacity>
-                </View>
-              ) : null}
-              {b.status === "confirmed" ? (
-                <TouchableOpacity
-                  style={styles.chatBtn}
-                  onPress={() => router.push({ pathname: "/chat", params: { bookingId: String(b.id) } } as never)}
+    <View style={styles.screen}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => {
+              setRefreshing(true);
+              load();
+            }}
+            tintColor={colors.primary}
+          />
+        }
+      >
+        <Container style={styles.content}>
+          <PageHeader
+            eyebrow="Provider"
+            title="Your bookings"
+            subtitle="Accept or reject requests, cancel when plans change, and message customers inside confirmed bookings."
+            onBack={() => router.push("/provider-home")}
+            actions={
+              <Button
+                label="Manage availability"
+                variant="outline"
+                size="sm"
+                icon="calendar"
+                onPress={() => router.push("/provider-availability")}
+              />
+            }
+          />
+
+          {/* Summary */}
+          <View style={styles.statsRow}>
+            <StatCard label="Pending" value={counts.pending.length} icon="clock" tone="warning" />
+            <StatCard label="Confirmed" value={counts.active.length} icon="check" tone="success" />
+            <StatCard
+              label="Completed"
+              value={counts.completed.length}
+              icon="sparkle"
+              tone="neutral"
+            />
+            <StatCard label="Cancelled" value={counts.closed.length} icon="close" tone="neutral" />
+          </View>
+
+          <View style={[styles.filters, isDesktop ? styles.filtersDesktop : null]}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
+              {FILTERS.map((option) => (
+                <Chip
+                  key={option.key}
+                  label={option.label}
+                  size="sm"
+                  active={filter === option.key}
+                  onPress={() => setFilter(option.key)}
+                />
+              ))}
+            </ScrollView>
+          </View>
+
+          {loading ? (
+            <ListSkeleton rows={4} />
+          ) : error ? (
+            <ErrorState description={error} onRetry={load} />
+          ) : visible.length === 0 ? (
+            <EmptyState
+              icon="calendar"
+              title={filter === "all" ? "No bookings yet" : "Nothing in this filter"}
+              description={
+                filter === "all"
+                  ? "Requests appear here as soon as a customer books one of your published slots."
+                  : "Try another status filter to see the rest of your bookings."
+              }
+              actionLabel={filter === "all" ? "Check my availability" : "Show all"}
+              onAction={() =>
+                filter === "all" ? router.push("/provider-availability") : setFilter("all")
+              }
+            />
+          ) : (
+            <View style={styles.list}>
+              {visible.map((booking, index) => (
+                <Animated.View
+                  key={booking.id}
+                  entering={FadeInDown.delay(Math.min(index, 6) * 40).duration(300)}
                 >
-                  <Text style={styles.chatBtnText}>Chat</Text>
-                </TouchableOpacity>
-              ) : null}
-              {b.status !== "cancelled" && b.status !== "confirmed" && canCancelBooking(b.booking_time, b.can_cancel) ? (
-                <TouchableOpacity
-                  style={styles.cancelBtn}
-                  disabled={cancellingId === b.id}
-                  onPress={() => cancel(b.id)}
-                >
-                  {cancellingId === b.id ? (
-                    <ActivityIndicator color={PRIMARY} size="small" />
-                  ) : (
-                    <Text style={styles.cancelText}>Cancel (24h+ before)</Text>
-                  )}
-                </TouchableOpacity>
-              ) : b.status !== "cancelled" ? (
-                <Text style={styles.tooLate}>Within 24h — cannot cancel</Text>
-              ) : null}
+                  <Card padding="lg" style={styles.card}>
+                    <View style={styles.cardTop}>
+                      <View style={styles.cardInfo}>
+                        <Text style={styles.service} numberOfLines={1}>
+                          {booking.service_title || `Service #${booking.service}`}
+                        </Text>
+                        <Text style={styles.meta}>
+                          {booking.client_name ? `Customer: ${booking.client_name} · ` : ""}
+                          {booking.booking_time
+                            ? new Date(booking.booking_time).toLocaleString(undefined, {
+                                weekday: "short",
+                                day: "numeric",
+                                month: "short",
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })
+                            : "Time pending"}
+                        </Text>
+                        {booking.location_city || booking.location_address ? (
+                          <View style={styles.locationRow}>
+                            <Icon name="pin" size={13} color={colors.textSubtle} />
+                            <Text style={styles.meta}>
+                              {[booking.location_address, booking.location_city]
+                                .filter(Boolean)
+                                .join(", ")}
+                            </Text>
+                          </View>
+                        ) : null}
+                        {booking.agreed_price || booking.proposed_price ? (
+                          <Text style={styles.price}>
+                            Rs{" "}
+                            {Number.parseFloat(
+                              String(booking.agreed_price ?? booking.proposed_price)
+                            ).toFixed(0)}
+                            {booking.agreed_price ? " agreed" : " proposed by customer"}
+                          </Text>
+                        ) : null}
+                      </View>
+                      <StatusBadge status={booking.status} size="md" />
+                    </View>
+
+                    <View style={styles.actions}>
+                      {booking.status === "pending" || booking.status === "offers" ? (
+                        <>
+                          <Button
+                            label="Accept"
+                            variant="success"
+                            size="sm"
+                            icon="check"
+                            loading={acceptingId === booking.id}
+                            onPress={() => accept(booking.id)}
+                          />
+                          <Button
+                            label="Reject"
+                            variant="danger"
+                            size="sm"
+                            icon="close"
+                            loading={rejectingId === booking.id}
+                            onPress={() => reject(booking.id)}
+                          />
+                        </>
+                      ) : null}
+
+                      {booking.status === "confirmed" || booking.chat_available ? (
+                        <Button
+                          label="Message customer"
+                          variant="secondary"
+                          size="sm"
+                          icon="chat"
+                          onPress={() =>
+                            router.push({
+                              pathname: "/chat",
+                              params: { bookingId: String(booking.id) },
+                            } as never)
+                          }
+                        />
+                      ) : null}
+
+                      {booking.service ? (
+                        <Button
+                          label="View service"
+                          variant="ghost"
+                          size="sm"
+                          onPress={() => router.push(`/service/${booking.service}` as never)}
+                        />
+                      ) : null}
+
+                      {!["cancelled", "rejected", "expired", "completed", "reviewed"].includes(
+                        booking.status
+                      ) ? (
+                        canCancelBooking(booking.booking_time, booking.can_cancel) ? (
+                          <Button
+                            label="Cancel booking"
+                            variant="ghost"
+                            size="sm"
+                            loading={cancellingId === booking.id}
+                            onPress={() => cancel(booking.id)}
+                          />
+                        ) : (
+                          <Text style={styles.tooLate}>
+                            Within 24 hours — contact the customer instead.
+                          </Text>
+                        )
+                      ) : null}
+                    </View>
+                  </Card>
+                </Animated.View>
+              ))}
             </View>
-          </Animated.View>
-        ))
-      )}
+          )}
+        </Container>
+      </ScrollView>
 
       <FeedbackModal
         visible={popup.visible}
@@ -223,61 +353,39 @@ export default function ProviderBookingsScreen() {
         message={popup.message}
         onClose={() => setPopup((p) => ({ ...p, visible: false }))}
       />
-    </ScreenShell>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  empty: { color: TEXT_MUTED, textAlign: "center", marginTop: 24 },
-  card: {
-    backgroundColor: CARD,
-    padding: 16,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: BORDER,
-    marginBottom: 12,
+  screen: { flex: 1, backgroundColor: colors.background },
+  content: { paddingTop: spacing.xxl, paddingBottom: spacing.giant },
+  statsRow: { flexDirection: "row", gap: spacing.md, flexWrap: "wrap" },
+  filters: { marginTop: spacing.xl, marginBottom: spacing.lg },
+  filtersDesktop: { marginTop: spacing.xxl },
+  chipRow: { gap: spacing.sm, paddingRight: spacing.lg },
+  list: { gap: spacing.md },
+  card: { gap: spacing.lg },
+  cardTop: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: spacing.md,
+    flexWrap: "wrap",
   },
-  service: { fontSize: 16, fontWeight: "700", color: TEXT },
-  meta: { color: TEXT_MUTED, marginTop: 6, marginBottom: 10 },
-  row: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  badge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 4,
-    backgroundColor: "#FFF7ED",
-  },
-  badgeConfirmed: { backgroundColor: "#ECFDF5" },
-  badgeCancelled: { backgroundColor: "#F3F4F6" },
-  badgeText: { fontSize: 12, fontWeight: "700", color: TEXT, textTransform: "capitalize" },
-  pendingActions: { flexDirection: "row", alignItems: "center", gap: 8 },
-  acceptBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 6,
-    backgroundColor: "#ECFDF5",
-    borderWidth: 1,
-    borderColor: "#86EFAC",
-  },
-  acceptText: { color: "#166534", fontWeight: "700", fontSize: 13 },
-  rejectBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 6,
-    backgroundColor: "#FEF2F2",
-    borderWidth: 1,
-    borderColor: "#FCA5A5",
-  },
-  rejectText: { color: "#B91C1C", fontWeight: "700", fontSize: 13 },
-  cancelBtn: { paddingHorizontal: 10, paddingVertical: 6 },
-  cancelText: { color: PRIMARY, fontWeight: "700", fontSize: 13 },
-  chatBtn: {
-    marginTop: 10,
-    borderWidth: 1,
-    borderColor: PRIMARY,
-    borderRadius: 8,
-    paddingVertical: 10,
+  cardInfo: { flex: 1, minWidth: 200, gap: spacing.xs },
+  service: { ...typography.h4, color: colors.text },
+  meta: { ...typography.small, color: colors.textMuted, flexShrink: 1 },
+  locationRow: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
+  price: { ...typography.smallStrong, color: colors.primaryDark },
+  actions: {
+    flexDirection: "row",
     alignItems: "center",
+    gap: spacing.sm,
+    flexWrap: "wrap",
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
   },
-  chatBtnText: { color: PRIMARY, fontWeight: "700", fontSize: 14 },
-  tooLate: { fontSize: 12, color: TEXT_MUTED, fontStyle: "italic" },
+  tooLate: { ...typography.caption, color: colors.textSubtle, fontStyle: "italic" },
 });

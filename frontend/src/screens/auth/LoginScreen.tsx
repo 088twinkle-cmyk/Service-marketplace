@@ -1,27 +1,29 @@
-
+/**
+ * LoginScreen — email + password sign in.
+ *
+ * Handles the OTP-required branch exactly as before: the JWT is stored, then
+ * the user is routed to `/otp` when the account still needs email verification.
+ */
 import React, { useState } from "react";
-import {
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
-  ActivityIndicator,
-} from "react-native";
+import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from "react-native";
+
 import { useRouter } from "expo-router";
+
+import AuthLayout from "../../components/AuthLayout";
+import FeedbackModal, { type FeedbackType } from "../../components/FeedbackModal";
+import Button from "../../components/ui/Button";
+import Input, { PasswordInput } from "../../components/ui/Input";
 import { authApi } from "../../services/api/authApi";
 import { getApiErrorMessage } from "../../services/api/client";
 import { setAuth, getPostLoginRoute } from "../../auth/auth";
-import AuthLayout, { authFormStyles as s } from "../../components/AuthLayout";
-import FeedbackModal, { type FeedbackType } from "../../components/FeedbackModal";
+import { colors, spacing, typography, weight } from "../../theme/tokens";
 
 export default function LoginScreen() {
   const router = useRouter();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [errors, setErrors] = useState<{ email?: string; password?: string }>({});
   const [loading, setLoading] = useState(false);
 
   const [popup, setPopup] = useState<{
@@ -30,48 +32,29 @@ export default function LoginScreen() {
     title: string;
     message: string;
     onConfirm?: () => void;
-  }>({
-    visible: false,
-    type: "info",
-    title: "",
-    message: "",
-  });
+  }>({ visible: false, type: "info", title: "", message: "" });
 
   const showPopup = (
     type: FeedbackType,
     title: string,
     message: string,
     onConfirm?: () => void
-  ) =>
-    setPopup({
-      visible: true,
-      type,
-      title,
-      message,
-      onConfirm,
-    });
+  ) => setPopup({ visible: true, type, title, message, onConfirm });
 
   const closePopup = () => {
     const cb = popup.onConfirm;
-
-    setPopup((p) => ({
-      ...p,
-      visible: false,
-      onConfirm: undefined,
-    }));
-
+    setPopup((p) => ({ ...p, visible: false, onConfirm: undefined }));
     cb?.();
   };
 
   const loginUser = async () => {
-    if (!email.trim() || !password.trim()) {
-      showPopup(
-        "error",
-        "Missing fields",
-        "Please enter your email and password."
-      );
-      return;
-    }
+    const nextErrors: typeof errors = {};
+    if (!email.trim()) nextErrors.email = "Enter the email you registered with.";
+    else if (!/^\S+@\S+\.\S+$/.test(email.trim())) nextErrors.email = "That email address looks incomplete.";
+    if (!password.trim()) nextErrors.password = "Enter your password.";
+
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) return;
 
     setLoading(true);
 
@@ -84,17 +67,13 @@ export default function LoginScreen() {
       const { access, refresh, user, otp_required, debug_otp } = res.data;
 
       if (!access || !user) {
-        showPopup(
-          "error",
-          "Login failed",
-          "Invalid response from server."
-        );
+        showPopup("error", "Login failed", "The server returned an unexpected response.");
         return;
       }
 
       /*
-       * Save the JWT even when OTP verification is still required.
-       * The OTP verification endpoint requires this access token.
+       * Save the JWT even when OTP verification is still required — the OTP
+       * verification endpoint is authenticated with this access token.
        */
       await setAuth({
         access,
@@ -110,33 +89,22 @@ export default function LoginScreen() {
             ? `Development OTP: ${debug_otp}`
             : "We emailed you a 6-digit code.";
 
-        showPopup(
-          "info",
-          "Email verification required",
-          hint,
-          () =>
-            router.replace({
-              pathname: "/otp",
-              params: { email: user.email ?? email.trim().toLowerCase() },
-            } as never)
+        showPopup("info", "Email verification required", hint, () =>
+          router.replace({
+            pathname: "/otp",
+            params: { email: user.email ?? email.trim().toLowerCase() },
+          } as never)
         );
         return;
       }
 
       const route = await getPostLoginRoute(user.role);
 
-      showPopup(
-        "success",
-        "Login successful",
-        `Welcome back, ${user.username}!`,
-        () => router.replace(route)
+      showPopup("success", "Signed in", `Welcome back, ${user.username}!`, () =>
+        router.replace(route)
       );
     } catch (err) {
-      showPopup(
-        "error",
-        "Login failed",
-        getApiErrorMessage(err, "Could not sign in.")
-      );
+      showPopup("error", "Login failed", getApiErrorMessage(err, "Could not sign in."));
     } finally {
       setLoading(false);
     }
@@ -144,72 +112,86 @@ export default function LoginScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={{ flex: 1 }}
+      style={styles.flex}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
       <AuthLayout
         title="Welcome back"
-        subtitle="Sign in to book services, manage bookings, or access your provider dashboard."
+        subtitle="Sign in to book services, manage bookings, or open your provider dashboard."
         showBack
+        onBack={() => router.back()}
       >
-        <ScrollView
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
-          <View style={s.card}>
-            <Text style={s.label}>Email</Text>
+        <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+          <Input
+            label="Email"
+            placeholder="you@example.com"
+            value={email}
+            onChangeText={(text) => {
+              setEmail(text);
+              setErrors((prev) => ({ ...prev, email: undefined }));
+            }}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            autoCorrect={false}
+            autoComplete="email"
+            icon="user"
+            error={errors.email}
+            required
+          />
 
-            <TextInput
-              placeholder="Enter your email"
-              value={email}
-              onChangeText={setEmail}
-              keyboardType="email-address"
-              autoCapitalize="none"
-              autoCorrect={false}
-              style={s.input}
-            />
+          <PasswordInput
+            label="Password"
+            placeholder="Enter your password"
+            value={password}
+            onChangeText={(text) => {
+              setPassword(text);
+              setErrors((prev) => ({ ...prev, password: undefined }));
+            }}
+            error={errors.password}
+            required
+          />
 
-            <Text style={s.label}>Password</Text>
+          <Button
+            label="Sign In"
+            size="lg"
+            fullWidth
+            loading={loading}
+            onPress={loginUser}
+          />
 
-            <TextInput
-              placeholder="Enter password"
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry
-              style={s.input}
-            />
-
-            <TouchableOpacity
-              onPress={loginUser}
-              disabled={loading}
-              style={[
-                s.button,
-                loading && s.buttonDisabled,
-              ]}
-            >
-              {loading ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={s.buttonText}>Sign In</Text>
-              )}
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={s.linkRow}
+          <View style={styles.links}>
+            <Button
+              label="Forgot password?"
+              variant="ghost"
+              size="sm"
               onPress={() => router.push("/forgot-password")}
-            >
-              <Text style={s.linkBold}>Forgot password?</Text>
-            </TouchableOpacity>
+            />
 
-            <TouchableOpacity
-              style={s.linkRow}
+            <View style={styles.newAccount}>
+              <Text style={styles.text}>New here?</Text>
+              <Button
+                label="Create account"
+                variant="ghost"
+                size="sm"
+                onPress={() => router.replace("/register")}
+              />
+            </View>
+          </View>
+
+          <View style={styles.hintBox}>
+            <Text style={styles.hintTitle}>Are you a service professional?</Text>
+            <Text style={styles.hintText}>
+              Create a provider account to publish services, manage availability and receive
+              bookings.
+            </Text>
+            <Button
+              label="Become an Expert"
+              variant="outline"
+              size="sm"
+              icon="sparkle"
+              style={{ marginTop: spacing.sm, alignSelf: "flex-start" }}
               onPress={() => router.replace("/register")}
-            >
-              <Text style={s.link}>
-                New here?{" "}
-                <Text style={s.linkBold}>Create account</Text>
-              </Text>
-            </TouchableOpacity>
+            />
           </View>
         </ScrollView>
       </AuthLayout>
@@ -220,10 +202,27 @@ export default function LoginScreen() {
         title={popup.title}
         message={popup.message}
         onClose={closePopup}
-        confirmLabel={
-          popup.type === "success" ? "Continue" : "OK"
-        }
+        confirmLabel={popup.type === "success" ? "Continue" : "OK"}
       />
     </KeyboardAvoidingView>
   );
 }
+
+const styles = StyleSheet.create({
+  flex: { flex: 1 },
+  links: { marginTop: spacing.md, alignItems: "center", gap: spacing.xs },
+  newAccount: { flexDirection: "row", alignItems: "center", gap: spacing.xs, flexWrap: "wrap", justifyContent: "center" },
+  text: { color: colors.textMuted, fontSize: 13.5 },
+  hintBox: {
+    marginTop: spacing.xxl,
+    padding: spacing.lg,
+    borderRadius: 14,
+    backgroundColor: colors.surfaceAlt,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  hintTitle: { ...typography.bodyStrong, color: colors.text },
+  hintText: { ...typography.small, color: colors.textMuted, marginTop: spacing.xs },
+  pressed: { opacity: 0.7 },
+  weightBold: { fontWeight: weight.bold },
+});

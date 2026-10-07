@@ -1,26 +1,24 @@
 /**
- * Email OTP verification.
+ * OtpScreen — email verification.
  *
- * Reached from the login screen when the backend answers `otp_required`, or
- * from registration. The access token issued by the login/register call is
- * already stored, and the OTP endpoints are authenticated with it.
+ * Reached from login when the backend answers `otp_required`, or from
+ * registration. The access token issued by login/register is already stored and
+ * authenticates the OTP endpoints.
  */
 import React, { useEffect, useState } from "react";
-import {
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  ScrollView,
-  ActivityIndicator,
-} from "react-native";
+import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from "react-native";
+
 import { useLocalSearchParams, useRouter } from "expo-router";
 
+import AuthLayout from "../../components/AuthLayout";
+import FeedbackModal, { type FeedbackType } from "../../components/FeedbackModal";
+import Button from "../../components/ui/Button";
+import Icon from "../../components/ui/Icon";
+import Input from "../../components/ui/Input";
 import { authApi } from "../../services/api/authApi";
 import { getApiErrorMessage } from "../../services/api/client";
 import { getAuth, getPostLoginRoute, setAuth } from "../../auth/auth";
-import AuthLayout, { authFormStyles as s } from "../../components/AuthLayout";
-import FeedbackModal, { type FeedbackType } from "../../components/FeedbackModal";
+import { colors, radius, spacing, typography } from "../../theme/tokens";
 
 const RESEND_COOLDOWN = 45;
 
@@ -30,6 +28,7 @@ export default function OtpScreen() {
 
   const [email, setEmail] = useState(params.email ?? "");
   const [otp, setOtp] = useState("");
+  const [error, setError] = useState<string | undefined>();
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
   const [sending, setSending] = useState(false);
@@ -72,17 +71,15 @@ export default function OtpScreen() {
 
   const verify = async () => {
     const code = otp.trim();
+
     if (!accessToken) {
-      showPopup(
-        "error",
-        "Session expired",
-        "Sign in again to request a new verification code.",
-        () => router.replace("/login")
+      showPopup("error", "Session expired", "Sign in again to request a new verification code.", () =>
+        router.replace("/login")
       );
       return;
     }
     if (code.length !== 6) {
-      showPopup("error", "Invalid code", "Enter the 6-digit code from your email.");
+      setError("Enter the 6-digit code from your email.");
       return;
     }
 
@@ -100,9 +97,7 @@ export default function OtpScreen() {
       });
 
       const route = await getPostLoginRoute(user.role);
-      showPopup("success", "Email verified", "Your account is ready.", () =>
-        router.replace(route)
-      );
+      showPopup("success", "Email verified", "Your account is ready.", () => router.replace(route));
     } catch (err) {
       showPopup("error", "Verification failed", getApiErrorMessage(err, "Invalid or expired code."));
     } finally {
@@ -133,65 +128,69 @@ export default function OtpScreen() {
   };
 
   return (
-    <AuthLayout
-      showBack
-      title="Verify your email"
-      subtitle={
-        email
-          ? `Enter the 6-digit code we sent to ${email}.`
-          : "Enter the 6-digit code we sent to your email."
-      }
-    >
-      <ScrollView keyboardShouldPersistTaps="handled">
-        <View style={s.card}>
-          <Text style={s.label}>Verification code</Text>
-          <TextInput
-            value={otp}
-            onChangeText={setOtp}
+    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+      <AuthLayout
+        showBack
+        onBack={() => router.replace("/login")}
+        title="Verify your email"
+        subtitle={
+          email
+            ? `Enter the 6-digit code we sent to ${email}.`
+            : "Enter the 6-digit code we sent to your email."
+        }
+      >
+        <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+          <View style={styles.notice}>
+            <Icon name="info" size={16} color={colors.primaryDark} />
+            <Text style={styles.noticeText}>
+              Codes expire quickly for security. If yours has expired, request a new one below.
+            </Text>
+          </View>
+
+          <Input
+            label="Verification code"
             placeholder="123456"
+            value={otp}
+            onChangeText={(value) => {
+              setOtp(value.replace(/\D/g, "").slice(0, 6));
+              setError(undefined);
+            }}
             keyboardType="number-pad"
             maxLength={6}
-            style={s.input}
             autoComplete="one-time-code"
+            error={error}
+            autoFocus
           />
 
-          <TouchableOpacity
+          <Button
+            label="Verify & continue"
+            size="lg"
+            fullWidth
+            loading={verifying}
             onPress={verify}
-            disabled={verifying}
-            style={[s.button, verifying && s.buttonDisabled]}
-          >
-            {verifying ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={s.buttonText}>Verify & continue</Text>
-            )}
-          </TouchableOpacity>
+          />
 
-          <TouchableOpacity
-            onPress={resend}
+          <Button
+            label={cooldown > 0 ? `Resend code in ${cooldown}s` : "Resend code"}
+            variant="ghost"
+            size="sm"
+            fullWidth
             disabled={sending || cooldown > 0}
-            style={s.linkRow}
-          >
-            {sending ? (
-              <ActivityIndicator size="small" />
-            ) : (
-              <Text style={s.link}>
-                {cooldown > 0 ? (
-                  `Resend code in ${cooldown}s`
-                ) : (
-                  <Text style={s.linkBold}>Resend code</Text>
-                )}
-              </Text>
-            )}
-          </TouchableOpacity>
+            style={{ marginTop: spacing.sm }}
+            onPress={resend}
+          />
 
-          <TouchableOpacity onPress={() => router.replace("/login")} style={s.linkRow}>
-            <Text style={s.link}>
-              Back to <Text style={s.linkBold}>sign in</Text>
-            </Text>
-          </TouchableOpacity>
-        </View>
-      </ScrollView>
+          <View style={styles.footer}>
+            <Text style={styles.footerText}>Wrong account?</Text>
+            <Button
+              label="Back to sign in"
+              variant="ghost"
+              size="sm"
+              onPress={() => router.replace("/login")}
+            />
+          </View>
+        </ScrollView>
+      </AuthLayout>
 
       <FeedbackModal
         visible={popup.visible}
@@ -200,6 +199,31 @@ export default function OtpScreen() {
         message={popup.message}
         onClose={closePopup}
       />
-    </AuthLayout>
+    </KeyboardAvoidingView>
   );
 }
+
+const styles = StyleSheet.create({
+  flex: { flex: 1 },
+  notice: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    alignItems: "flex-start",
+    padding: spacing.md,
+    borderRadius: radius.md,
+    backgroundColor: colors.primarySoft,
+    borderWidth: 1,
+    borderColor: colors.primarySoftBorder,
+    marginBottom: spacing.lg,
+  },
+  noticeText: { flex: 1, ...typography.small, color: colors.primaryDark },
+  footer: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.xs,
+    marginTop: spacing.md,
+    flexWrap: "wrap",
+  },
+  footerText: { color: colors.textMuted, fontSize: 13.5 },
+});

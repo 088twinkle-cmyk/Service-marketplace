@@ -56,16 +56,49 @@ export function getApiBaseUrl(): string {
   return `http://${FALLBACK_HOST}:${API_PORT}/`;
 }
 
+/** Hosts that only exist inside the dev machine / LAN, never in a browser. */
+const LOOPBACK_HOST = /^(localhost|127\.\d{1,3}\.\d{1,3}\.\d{1,3}|0\.0\.0\.0|\[::1\])$/i;
+const PRIVATE_HOST =
+  /^(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|169\.254\.\d{1,3}\.\d{1,3})$/;
+
 /**
  * Resolve a (possibly relative) media URL returned by the Django backend
- * into an absolute URL the current device can reach.
+ * into a URL the current device can actually load.
+ *
+ * The backend serialises absolute URLs built from the host it happens to run
+ * on (`http://127.0.0.1:8001/media/...` when developed locally). Those are
+ * unreachable from another machine, a phone or a preview URL, so dev/LAN hosts
+ * are rewritten to a same-origin `/media/...` path: the browser hits the Vite
+ * `/media` proxy (or the production reverse proxy) and the native app gets the
+ * API base prepended again below. Genuinely remote media (S3, CDN) is kept
+ * untouched.
  */
 export function resolveMediaUrl(url: string | null | undefined): string {
   if (!url) return "";
-  // Already absolute — use as-is
-  if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("data:")) {
-    return url;
+
+  // Inline data — nothing to resolve.
+  if (url.startsWith("data:")) return url;
+
+  if (url.startsWith("http://") || url.startsWith("https://")) {
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return url;
+    }
+
+    if (!LOOPBACK_HOST.test(parsed.hostname) && !PRIVATE_HOST.test(parsed.hostname)) {
+      // A real remote URL — use as-is.
+      return url;
+    }
+
+    const path = `${parsed.pathname}${parsed.search}`;
+    const base = getApiBaseUrl().replace(/\/$/, "");
+    // Web: base is "/" → "" → the path stays relative and the dev/prod proxy
+    // forwards it. Native: the API host is prepended again.
+    return base ? `${base}${path}` : path;
   }
+
   // Relative path — prepend the API base (strip trailing slash to avoid double-slash)
   const base = getApiBaseUrl().replace(/\/$/, "");
   const path = url.startsWith("/") ? url : `/${url}`;
