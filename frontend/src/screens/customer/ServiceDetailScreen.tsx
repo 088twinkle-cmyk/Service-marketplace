@@ -1,40 +1,45 @@
+/**
+ * ServiceDetailScreen — the listing detail page.
+ *
+ * Desktop: gallery + description on the left, a sticky booking card on the
+ * right. Mobile: stacked content with a sticky action bar. Same data and the
+ * same booking hand-off as before (`/book` with service + provider params).
+ */
 import React, { useEffect, useState } from "react";
-import {
-  View,
-  Text,
-  ScrollView,
-  TouchableOpacity,
-  StyleSheet,
-  ActivityIndicator,
-  Dimensions,
-} from "react-native";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+
 import { Image } from "expo-image";
 import Animated, { FadeInDown } from "react-native-reanimated";
-import { servicesApi, type ServiceItem } from "../../services/api/servicesApi";
-import { reviewsApi, type ReviewItem } from "../../services/api/reviewsApi";
-import ReviewList from "../../components/ReviewList";
-import FeedbackModal, { type FeedbackType } from "../../components/FeedbackModal";
-import { trackServiceView } from "../../utils/activityHistory";
-import { getAuth } from "../../auth/auth";
-import {
-  BACKGROUND,
-  CARD,
-  TEXT,
-  TEXT_MUTED,
-  BORDER,
-  PRIMARY,
-  STAR,
-} from "../../theme/colors";
+import { useLocalSearchParams, useRouter } from "expo-router";
 
-const { width: SCREEN_W } = Dimensions.get("window");
+import FeedbackModal, { type FeedbackType } from "../../components/FeedbackModal";
+import ReviewList from "../../components/ReviewList";
+import Avatar from "../../components/ui/Avatar";
+import Badge, { VerifiedBadge } from "../../components/ui/Badge";
+import Button from "../../components/ui/Button";
+import Card, { Divider } from "../../components/ui/Card";
+import Icon from "../../components/ui/Icon";
+import { Container } from "../../components/ui/Layout";
+import { ErrorState } from "../../components/ui/States";
+import { SkeletonBlock } from "../../components/ui/Skeleton";
+import { getAuth } from "../../auth/auth";
+import { resolveMediaUrl } from "../../config/api";
+import { reviewsApi, type ReviewItem } from "../../services/api/reviewsApi";
+import { servicesApi, type ServiceItem } from "../../services/api/servicesApi";
+import { colors, radius, shadows, spacing, typography, weight } from "../../theme/tokens";
+import { useResponsive } from "../../theme/responsive";
+import { trackServiceView } from "../../utils/activityHistory";
 
 export default function ServiceDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const { isDesktop } = useResponsive();
+
   const [service, setService] = useState<ServiceItem | null>(null);
   const [reviews, setReviews] = useState<ReviewItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
+  const [activeImage, setActiveImage] = useState(0);
   const [providerOwnsService, setProviderOwnsService] = useState(false);
   const [popup, setPopup] = useState({
     visible: false,
@@ -45,6 +50,7 @@ export default function ServiceDetailScreen() {
 
   useEffect(() => {
     const load = async () => {
+      setLoading(true);
       try {
         const s = await servicesApi.get(Number(id));
         setService(s);
@@ -53,14 +59,15 @@ export default function ServiceDetailScreen() {
           title: s.title,
           provider_name: s.provider_name,
         });
-        const r = await reviewsApi.byProvider(s.provider);
+        const r = await reviewsApi.byProvider(s.provider).catch(() => []);
         setReviews(r);
       } catch {
+        setFailed(true);
         setPopup({
           visible: true,
           type: "error",
-          title: "Error",
-          message: "Could not load service.",
+          title: "Could not load this service",
+          message: "The listing may have been removed, or the server is unreachable.",
         });
       } finally {
         setLoading(false);
@@ -82,99 +89,241 @@ export default function ServiceDetailScreen() {
   }, [service, router]);
 
   if (loading) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color={PRIMARY} />
-      </View>
-    );
+    return <DetailSkeleton />;
   }
 
   if (!service) {
     return (
-      <View style={styles.center}>
-        <Text style={styles.notFoundTitle}>Service not found</Text>
-        <Text style={styles.notFoundText}>This listing may have been removed.</Text>
-        <TouchableOpacity style={styles.bookBtn} onPress={() => router.replace("/")}>
-          <Text style={styles.bookText}>Back to home</Text>
-        </TouchableOpacity>
-      </View>
+      <Container style={styles.notFoundWrap}>
+        <ErrorState
+          title="Service not found"
+          description={
+            failed
+              ? "We could not load this listing. Check your connection and try again."
+              : "This listing may have been removed by the provider."
+          }
+          actionLabel="Back to marketplace"
+          onRetry={() => router.replace("/")}
+        />
+        <View style={styles.notFoundActions}>
+          <Button label="Browse services" variant="outline" onPress={() => router.push("/search")} />
+        </View>
+      </Container>
     );
   }
 
   const images = service.images ?? [];
   const hasPhotos = images.length > 0;
+  const price = Number.parseFloat(String(service.price ?? "0"));
+
+  const bookingParams = {
+    pathname: "/book" as const,
+    params: {
+      serviceId: String(service.id),
+      title: service.title,
+      price: service.price,
+      provider: service.provider_name,
+      providerId: String(service.provider),
+    },
+  };
 
   return (
     <View style={styles.screen}>
-      <ScrollView>
-        {hasPhotos ? (
-          <ScrollView horizontal pagingEnabled showsHorizontalScrollIndicator={false}>
-            {images.map((img) => (
-              <Image
-                key={img.id}
-                source={{ uri: img.image_url }}
-                style={styles.hero}
-                contentFit="cover"
-              />
-            ))}
-          </ScrollView>
-        ) : (
-          <View style={styles.noPhotoHero}>
-            <Text style={styles.noPhotoText}>Provider has not uploaded photos yet</Text>
-          </View>
-        )}
+      <ScrollView showsVerticalScrollIndicator={false}>
+        <Container style={styles.content}>
+          <Pressable
+            onPress={() => router.back()}
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
+            style={({ pressed }: { pressed: boolean }) => [styles.back, pressed && styles.pressed]}
+          >
+            <Icon name="chevron-left" size={13} color={colors.primary} />
+            <Text style={styles.backText}>Back</Text>
+          </Pressable>
 
-        <Animated.View entering={FadeInDown.duration(450)} style={styles.body}>
-          <Text style={styles.title}>{service.title}</Text>
-          <View style={styles.sellerRow}>
-            <View style={styles.avatar}>
-              <Text style={styles.avatarText}>
-                {service.provider_name.charAt(0).toUpperCase()}
-              </Text>
-            </View>
-            <View>
-              <Text style={styles.seller}>{service.provider_name}</Text>
-              <View style={styles.ratingRow}>
-                <Text style={styles.star}>★</Text>
-                <Text style={styles.rating}>
-                  {(service.avg_rating ?? 0) > 0
-                    ? `${service.avg_rating?.toFixed(1)} (${service.review_count} reviews)`
-                    : "New provider"}
-                </Text>
+          <View style={[styles.layout, isDesktop ? styles.layoutDesktop : null]}>
+            {/* Main column */}
+            <Animated.View entering={FadeInDown.duration(420)} style={styles.main}>
+              <View style={styles.gallery}>
+                {hasPhotos ? (
+                  <Image
+                    source={{ uri: resolveMediaUrl(images[activeImage]?.image_url) }}
+                    style={styles.heroImage}
+                    contentFit="cover"
+                    transition={200}
+                  />
+                ) : (
+                  <View style={[styles.heroImage, styles.heroPlaceholder]}>
+                    <Icon name="sparkle" size={26} color={colors.primary} />
+                    <Text style={styles.heroPlaceholderTitle}>No photos yet</Text>
+                    <Text style={styles.heroPlaceholderText}>
+                      This provider has not uploaded photos for the listing.
+                    </Text>
+                  </View>
+                )}
+
+                {images.length > 1 ? (
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.thumbs}
+                  >
+                    {images.map((image, index) => (
+                      <Pressable
+                        key={image.id}
+                        onPress={() => setActiveImage(index)}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Show photo ${index + 1}`}
+                        style={[
+                          styles.thumbWrap,
+                          index === activeImage ? styles.thumbActive : null,
+                        ]}
+                      >
+                        <Image
+                          source={{ uri: resolveMediaUrl(image.image_url) }}
+                          style={styles.thumb}
+                          contentFit="cover"
+                        />
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                ) : null}
               </View>
+
+              <View style={styles.headerBlock}>
+                <View style={styles.badgeRow}>
+                  {service.category_name ? (
+                    <Badge label={service.category_name} tone="primary" />
+                  ) : null}
+                  {service.provider_verified ? <VerifiedBadge /> : null}
+                  {service.service_mode ? (
+                    <Badge label={service.service_mode} tone="neutral" />
+                  ) : null}
+                </View>
+
+                <Text style={styles.title}>{service.title}</Text>
+
+                <View style={styles.metaRow}>
+                  <View style={styles.metaItem}>
+                    <Icon name="star" size={14} color={colors.star} />
+                    <Text style={styles.metaText}>
+                      {(service.avg_rating ?? 0) > 0
+                        ? `${service.avg_rating?.toFixed(1)} · ${service.review_count ?? 0} review${
+                            (service.review_count ?? 0) === 1 ? "" : "s"
+                          }`
+                        : "No reviews yet"}
+                    </Text>
+                  </View>
+                  <View style={styles.metaItem}>
+                    <Icon name="pin" size={14} color={colors.textSubtle} />
+                    <Text style={styles.metaText}>
+                      {service.location || "Location on request"}
+                      {service.distance_km != null ? ` · ${service.distance_km.toFixed(1)} km away` : ""}
+                    </Text>
+                  </View>
+                  {service.duration_minutes ? (
+                    <View style={styles.metaItem}>
+                      <Icon name="clock" size={14} color={colors.textSubtle} />
+                      <Text style={styles.metaText}>{service.duration_minutes} min</Text>
+                    </View>
+                  ) : null}
+                </View>
+              </View>
+
+              <Card padding="lg" style={styles.section}>
+                <Text style={styles.sectionTitle}>About this service</Text>
+                <Text style={styles.description}>
+                  {service.description || "The provider has not added a description yet."}
+                </Text>
+              </Card>
+
+              <Card padding="lg" style={styles.section}>
+                <Text style={styles.sectionTitle}>Provided by</Text>
+                <View style={styles.providerRow}>
+                  <Avatar
+                    uri={service.provider_avatar ?? undefined}
+                    name={service.provider_name}
+                    size={56}
+                    verified={service.provider_verified}
+                  />
+                  <View style={styles.providerInfo}>
+                    <Text style={styles.providerName}>{service.provider_name}</Text>
+                    <Text style={styles.providerMeta}>
+                      {service.location ? `${service.location} · ` : ""}
+                      {service.provider_verified ? "ID verified" : "Verification pending"}
+                    </Text>
+                  </View>
+                  <Button
+                    label="View profile"
+                    variant="outline"
+                    size="sm"
+                    onPress={() =>
+                      router.push({
+                        pathname: "/provider/[id]",
+                        params: { id: String(service.provider), name: service.provider_name },
+                      } as never)
+                    }
+                  />
+                </View>
+              </Card>
+
+              <Card padding="lg" style={styles.section}>
+                <Text style={styles.sectionTitle}>
+                  Reviews {reviews.length > 0 ? `(${reviews.length})` : ""}
+                </Text>
+                <ReviewList reviews={reviews} />
+              </Card>
+            </Animated.View>
+
+            {/* Booking rail */}
+            <View style={[styles.rail, isDesktop ? styles.railDesktop : null]}>
+              <Card padding="lg" style={styles.bookingCard}>
+                <Text style={styles.priceLabel}>Starting price</Text>
+                <Text style={styles.price}>Rs {price.toFixed(0)}</Text>
+                <Text style={styles.priceHint}>
+                  The final amount is confirmed with the provider before the work starts.
+                </Text>
+
+                {!providerOwnsService ? (
+                  <Button
+                    label="Continue to booking"
+                    size="lg"
+                    fullWidth
+                    trailingIcon="arrow-right"
+                    onPress={() => router.push(bookingParams as never)}
+                  />
+                ) : (
+                  <Badge label="This is your own listing" tone="neutral" size="md" />
+                )}
+
+                <Divider style={{ marginVertical: spacing.lg }} />
+
+                <View style={styles.railFacts}>
+                  <RailFact icon="calendar" text="Pick a real slot from the provider's calendar" />
+                  <RailFact icon="chat" text="Chat opens with the booking once it is confirmed" />
+                  <RailFact icon="clock" text="Free cancellation up to 24 hours before" />
+                </View>
+              </Card>
             </View>
           </View>
-
-          <Text style={styles.price}>Rs {parseFloat(service.price).toFixed(0)}</Text>
-          <Text style={styles.desc}>{service.description}</Text>
-          <Text style={styles.loc}>📍 {service.location}</Text>
-
-          <Text style={styles.section}>Reviews & comments</Text>
-          <ReviewList reviews={reviews} />
-        </Animated.View>
+        </Container>
       </ScrollView>
 
-      <View style={styles.footer}>
-        {!providerOwnsService ? (
-          <TouchableOpacity
-            style={styles.bookBtn}
-            onPress={() =>
-              router.push({
-                pathname: "/book",
-                params: {
-                  serviceId: String(service.id),
-                  title: service.title,
-                  price: service.price,
-                  provider: service.provider_name,
-                  providerId: String(service.provider),
-                },
-              })
-            }
-          >
-            <Text style={styles.bookText}>Continue</Text>
-          </TouchableOpacity>
-        ) : null}
-      </View>
+      {/* Mobile sticky action bar */}
+      {!isDesktop && !providerOwnsService ? (
+        <View style={styles.stickyBar}>
+          <View style={styles.stickyPrice}>
+            <Text style={styles.stickyLabel}>Starting price</Text>
+            <Text style={styles.stickyValue}>Rs {price.toFixed(0)}</Text>
+          </View>
+          <Button
+            label="Continue"
+            size="lg"
+            trailingIcon="arrow-right"
+            onPress={() => router.push(bookingParams as never)}
+          />
+        </View>
+      ) : null}
 
       <FeedbackModal
         visible={popup.visible}
@@ -187,52 +336,115 @@ export default function ServiceDetailScreen() {
   );
 }
 
+function RailFact({ icon, text }: { icon: "calendar" | "chat" | "clock"; text: string }) {
+  return (
+    <View style={styles.railFact}>
+      <Icon name={icon} size={15} color={colors.primary} />
+      <Text style={styles.railFactText}>{text}</Text>
+    </View>
+  );
+}
+
+function DetailSkeleton() {
+  return (
+    <Container style={styles.content}>
+      <SkeletonBlock width={90} height={14} />
+      <View style={{ height: spacing.lg }} />
+      <SkeletonBlock height={300} radiusValue={radius.xl} />
+      <View style={{ height: spacing.xl }} />
+      <SkeletonBlock width="70%" height={26} />
+      <View style={{ height: spacing.md }} />
+      <SkeletonBlock width="40%" height={14} />
+      <View style={{ height: spacing.xl }} />
+      <SkeletonBlock height={120} radiusValue={radius.xl} />
+    </Container>
+  );
+}
+
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: BACKGROUND },
-  center: { flex: 1, justifyContent: "center", alignItems: "center", padding: 24, backgroundColor: BACKGROUND },
-  notFoundTitle: { fontSize: 20, fontWeight: "700", color: TEXT, marginBottom: 8 },
-  notFoundText: { color: TEXT_MUTED, marginBottom: 20 },
-  hero: { width: SCREEN_W, height: 240 },
-  noPhotoHero: {
-    width: SCREEN_W,
-    height: 200,
-    backgroundColor: "#F1F5F9",
+  screen: { flex: 1, backgroundColor: colors.background },
+  content: { paddingTop: spacing.xl, paddingBottom: spacing.giant },
+  back: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    alignSelf: "flex-start",
+    marginBottom: spacing.lg,
+  },
+  backText: { color: colors.primary, fontWeight: weight.semibold, fontSize: 13.5 },
+  pressed: { opacity: 0.7 },
+
+  layout: { gap: spacing.xxl },
+  layoutDesktop: { flexDirection: "row", alignItems: "flex-start" },
+  main: { flex: 1, gap: spacing.xl },
+  rail: { width: "100%" },
+  railDesktop: { width: 360, flexShrink: 0 },
+
+  gallery: { gap: spacing.md },
+  heroImage: {
+    width: "100%",
+    height: 320,
+    borderRadius: radius.xl,
+    backgroundColor: colors.surfaceMuted,
+  },
+  heroPlaceholder: {
     alignItems: "center",
     justifyContent: "center",
+    gap: spacing.xs,
+    backgroundColor: colors.primarySoft,
   },
-  noPhotoText: { color: TEXT_MUTED, fontSize: 14 },
-  body: { padding: 20 },
-  title: { fontSize: 22, fontWeight: "700", color: TEXT, marginBottom: 14 },
-  sellerRow: { flexDirection: "row", alignItems: "center", marginBottom: 16 },
-  avatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: PRIMARY,
+  heroPlaceholderTitle: { ...typography.h4, color: colors.primaryDark },
+  heroPlaceholderText: { ...typography.small, color: colors.textMuted },
+  thumbs: { gap: spacing.sm },
+  thumbWrap: {
+    borderRadius: radius.md,
+    borderWidth: 2,
+    borderColor: "transparent",
+    padding: 2,
+  },
+  thumbActive: { borderColor: colors.primary },
+  thumb: { width: 76, height: 60, borderRadius: radius.sm, backgroundColor: colors.surfaceMuted },
+
+  headerBlock: { gap: spacing.md },
+  badgeRow: { flexDirection: "row", gap: spacing.sm, flexWrap: "wrap" },
+  title: { ...typography.h1, color: colors.text, letterSpacing: -0.4 },
+  metaRow: { flexDirection: "row", gap: spacing.lg, flexWrap: "wrap" },
+  metaItem: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
+  metaText: { fontSize: 13, color: colors.textMuted, fontWeight: weight.medium },
+
+  section: { gap: spacing.md },
+  sectionTitle: { ...typography.h4, color: colors.text },
+  description: { ...typography.body, color: colors.text, lineHeight: 24 },
+
+  providerRow: { flexDirection: "row", alignItems: "center", gap: spacing.lg, flexWrap: "wrap" },
+  providerInfo: { flex: 1, minWidth: 160 },
+  providerName: { ...typography.h4, color: colors.text },
+  providerMeta: { ...typography.small, color: colors.textMuted, marginTop: 2 },
+
+  bookingCard: { gap: spacing.sm, ...shadows.sm },
+  priceLabel: { ...typography.caption, color: colors.textMuted, textTransform: "uppercase", letterSpacing: 0.5 },
+  price: { ...typography.display, color: colors.text, letterSpacing: -0.6 },
+  priceHint: { ...typography.small, color: colors.textMuted, marginBottom: spacing.md },
+  railFacts: { gap: spacing.md },
+  railFact: { flexDirection: "row", alignItems: "flex-start", gap: spacing.sm },
+  railFactText: { flex: 1, ...typography.small, color: colors.textMuted },
+
+  stickyBar: {
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    marginRight: 12,
-  },
-  avatarText: { color: "#fff", fontWeight: "800", fontSize: 18 },
-  seller: { fontSize: 16, fontWeight: "700", color: TEXT },
-  ratingRow: { flexDirection: "row", alignItems: "center", marginTop: 4 },
-  star: { color: STAR, marginRight: 4 },
-  rating: { color: TEXT_MUTED, fontSize: 14 },
-  price: { fontSize: 24, fontWeight: "800", color: TEXT, marginBottom: 12 },
-  desc: { fontSize: 15, color: TEXT, lineHeight: 23, marginBottom: 10 },
-  loc: { color: TEXT_MUTED, marginBottom: 24 },
-  section: { fontSize: 18, fontWeight: "700", color: TEXT, marginBottom: 12 },
-  footer: {
-    padding: 16,
+    justifyContent: "space-between",
+    gap: spacing.lg,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    backgroundColor: colors.surface,
     borderTopWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: CARD,
+    borderTopColor: colors.border,
+    ...shadows.lg,
   },
-  bookBtn: {
-    backgroundColor: PRIMARY,
-    paddingVertical: 16,
-    borderRadius: 4,
-    alignItems: "center",
-  },
-  bookText: { color: "#fff", fontWeight: "700", fontSize: 16 },
+  stickyPrice: { flexShrink: 1 },
+  stickyLabel: { fontSize: 11, color: colors.textSubtle, textTransform: "uppercase", letterSpacing: 0.5 },
+  stickyValue: { ...typography.price, color: colors.text },
+
+  notFoundWrap: { paddingTop: spacing.giant, paddingBottom: spacing.giant, alignItems: "center" },
+  notFoundActions: { marginTop: spacing.lg },
 });

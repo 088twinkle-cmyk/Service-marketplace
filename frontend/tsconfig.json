@@ -28,9 +28,6 @@
       "@/assets/*": [
         "./assets/*"
       ],
-      "expo-router": [
-        "./src/shims/expo-router.tsx"
-      ],
       "expo-image": [
         "./src/shims/expo-image.tsx"
       ],

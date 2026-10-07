@@ -14,6 +14,8 @@ export type ServiceItem = {
   provider_verified: boolean;
   provider_avatar?: string | null;
   provider_rating?: number;
+  /** Number of reviews for the provider (from the catalog serializer). */
+  provider_reviews?: number;
   is_mine?: boolean;
   title: string;
   description: string;

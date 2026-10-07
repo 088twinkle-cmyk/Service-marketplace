@@ -1,8 +1,16 @@
+/**
+ * WorkflowPlaceholder — a styled "next step" card kept for compatibility with
+ * screens that describe an upcoming workflow step.
+ */
 import React from "react";
-import { TouchableOpacity, Text } from "react-native";
 import { useRouter } from "expo-router";
+
+import Button from "./ui/Button";
+import Card from "./ui/Card";
+import Icon from "./ui/Icon";
 import ScreenShell from "./ScreenShell";
-import { sharedStyles } from "../theme/sharedStyles";
+import { colors, spacing, typography } from "../theme/tokens";
+import { View } from "react-native";
 
 type Props = {
   title: string;
@@ -22,14 +30,38 @@ export default function WorkflowPlaceholder({
   const router = useRouter();
 
   return (
-    <ScreenShell step={step} title={title} subtitle={description}>
+    <ScreenShell step={step} title={title} subtitle={description} width="narrow">
+      <Card>
+        <View style={{ flexDirection: "row", gap: spacing.md, alignItems: "flex-start" }}>
+          <Icon name="info" size={20} color={colors.primary} />
+          <View style={{ flex: 1 }}>
+            <View style={{ borderBottomWidth: 0 }}>
+              <View
+                style={{
+                  height: 6,
+                  width: 60,
+                  borderRadius: 3,
+                  backgroundColor: colors.primarySoft,
+                  marginBottom: spacing.md,
+                }}
+              />
+            </View>
+            <View style={{ gap: spacing.sm }}>
+              <View style={{ height: 12, width: "80%", borderRadius: 6, backgroundColor: colors.surfaceMuted }} />
+              <View style={{ height: 12, width: "60%", borderRadius: 6, backgroundColor: colors.surfaceMuted }} />
+            </View>
+          </View>
+        </View>
+      </Card>
+
       {nextRoute ? (
-        <TouchableOpacity
+        <Button
+          label={nextLabel}
+          trailingIcon="arrow-right"
+          fullWidth
+          style={{ marginTop: spacing.lg }}
           onPress={() => router.push(nextRoute as never)}
-          style={sharedStyles.btnPrimary}
-        >
-          <Text style={sharedStyles.btnPrimaryText}>{nextLabel}</Text>
-        </TouchableOpacity>
+        />
       ) : null}
     </ScreenShell>
   );

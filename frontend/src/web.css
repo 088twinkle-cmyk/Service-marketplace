@@ -5,11 +5,15 @@ body {
   height: 100%;
   margin: 0;
   padding: 0;
-  background: #f8fafc;
+  /* Matches theme/tokens.ts → colors.background */
+  background: #f7f8fc;
   color: #0f172a;
+  color-scheme: light;
   font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
     "Helvetica Neue", Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-tap-highlight-color: transparent;
 }
 
 #root {
@@ -38,6 +42,19 @@ button {
   font-family: inherit;
 }
 
+/* Keyboard users get a visible focus ring; pointer users do not (the
+   components draw their own hover/pressed states). */
+:focus-visible {
+  outline: 2px solid #4f46e5;
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+::selection {
+  background: #e0e7ff;
+  color: #312e81;
+}
+
 /* Skeleton pulse used by the reanimated web shim. */
 @keyframes rnm-skeleton-pulse {
   0% {
@@ -61,7 +78,22 @@ button {
     background: #cbd5e1;
     border-radius: 6px;
   }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+  }
   ::-webkit-scrollbar-track {
     background: transparent;
+  }
+}
+
+/* Respect the OS setting: keep the layout identical, drop the motion. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
   }
 }

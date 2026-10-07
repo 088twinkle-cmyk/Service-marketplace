@@ -1,27 +1,39 @@
-import React, { useEffect, useState, useMemo, useCallback } from "react";
-import {
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  ActivityIndicator,
-  View,
-} from "react-native";
-import { useRouter } from "expo-router";
+/**
+ * ProviderAvailabilityScreen — the provider calendar.
+ *
+ * Same behaviour as before: pick a service, tap a day, block/unblock slots and
+ * add a new time slot from presets. The redesign adds slot counters, a clearer
+ * month view and a guided empty state for providers without published services.
+ */
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { ScrollView, StyleSheet, Text, View } from "react-native";
+
+import axios from "axios";
 import Animated, { FadeInDown } from "react-native-reanimated";
-import ScreenShell from "../../components/ScreenShell";
+import { useRouter } from "expo-router";
+
 import BookingCalendar from "../../components/BookingCalendar";
 import FeedbackModal, { type FeedbackType } from "../../components/FeedbackModal";
+import Badge from "../../components/ui/Badge";
+import Button from "../../components/ui/Button";
+import Card from "../../components/ui/Card";
+import Icon from "../../components/ui/Icon";
+import { Chip, Container, StatCard } from "../../components/ui/Layout";
+import PageHeader from "../../components/ui/PageHeader";
+import { EmptyState } from "../../components/ui/States";
+import { SkeletonBlock } from "../../components/ui/Skeleton";
 import { bookingsApi, type AvailabilitySlot } from "../../services/api/bookingsApi";
 import { servicesApi, type ServiceItem } from "../../services/api/servicesApi";
 import { getApiErrorMessage } from "../../services/api/client";
-import { getAuth } from "../../auth/auth";
-import { logout } from "../../auth/auth";
+import { getAuth, logout } from "../../auth/auth";
 import { TIME_PRESETS } from "../../utils/bookingHelpers";
-import { PRIMARY, CARD, TEXT, TEXT_MUTED, BORDER, TAG_BG } from "../../theme/colors";
-import axios from "axios";
+import { colors, radius, spacing, typography, weight } from "../../theme/tokens";
+import { useResponsive } from "../../theme/responsive";
 
 export default function ProviderAvailabilityScreen() {
   const router = useRouter();
+  const { isDesktop } = useResponsive();
+
   const [month, setMonth] = useState(new Date());
   const [slots, setSlots] = useState<AvailabilitySlot[]>([]);
   const [myServices, setMyServices] = useState<ServiceItem[]>([]);
@@ -52,9 +64,8 @@ export default function ProviderAvailabilityScreen() {
     try {
       const mine = await servicesApi.listMine();
       setMyServices(mine);
-      if (mine.length && !selectedServiceId) {
-        setSelectedServiceId(mine[0].id);
-      }
+      if (mine.length && !selectedServiceId) setSelectedServiceId(mine[0].id);
+
       const svcId = selectedServiceId ?? mine[0]?.id;
       const data = await bookingsApi.listAvailability({
         month: monthKey,
@@ -84,17 +95,17 @@ export default function ProviderAvailabilityScreen() {
     if (slot.status === "booked") {
       showPopup(
         "info",
-        "Booked slot",
-        "Cancel the booking from View bookings (24+ hrs before) to release this time."
+        "Slot already booked",
+        "Cancel the booking from your bookings list (24+ hours before) to release this time."
       );
       return;
     }
     try {
       await bookingsApi.toggleBlock(slot.id);
       await load();
-      showPopup("success", "Updated", "Slot status updated.");
+      showPopup("success", "Slot updated", "The slot status has been updated.");
     } catch (err) {
-      showPopup("error", "Failed", getApiErrorMessage(err, "Could not update."));
+      showPopup("error", "Update failed", getApiErrorMessage(err, "Could not update the slot."));
     }
   };
 
@@ -105,7 +116,7 @@ export default function ProviderAvailabilityScreen() {
     }
     const serviceId = selectedServiceId ?? myServices[0]?.id;
     if (!serviceId) {
-      showPopup("info", "No service", "Publish a service before adding availability.");
+      showPopup("info", "No service yet", "Publish a service before adding availability.");
       router.push("/provider-services");
       return;
     }
@@ -121,97 +132,167 @@ export default function ProviderAvailabilityScreen() {
       showPopup(
         "success",
         "Slot added",
-        `${selectedDate} ${selectedPreset.label} is now available. Add more times on the same day if needed.`
+        `${selectedDate} · ${selectedPreset.label} is now open for booking. Add more times on the same day if needed.`
       );
     } catch (err) {
-      showPopup("error", "Failed", getApiErrorMessage(err, "Could not add slot. Times may overlap."));
+      showPopup(
+        "error",
+        "Could not add slot",
+        getApiErrorMessage(err, "Times may overlap with an existing slot.")
+      );
     } finally {
       setAdding(false);
     }
   };
 
+  const counts = useMemo(() => {
+    const available = slots.filter((slot) => slot.status === "available").length;
+    const booked = slots.filter((slot) => slot.status === "booked").length;
+    const blocked = slots.filter((slot) => slot.status === "blocked").length;
+    return { available, booked, blocked };
+  }, [slots]);
+
+  const selectedService = myServices.find((service) => service.id === selectedServiceId);
+
+  if (!loading && myServices.length === 0) {
+    return (
+      <View style={styles.screen}>
+        <ScrollView showsVerticalScrollIndicator={false}>
+          <Container width="narrow" style={styles.content}>
+            <PageHeader
+              eyebrow="Provider calendar"
+              title="Manage availability"
+              subtitle="Customers can only book the time slots you publish here."
+              onBack={() => router.push("/provider-home")}
+            />
+            <EmptyState
+              icon="calendar"
+              title="Publish a service first"
+              description="Availability is attached to a service, so add a listing before opening time slots."
+              actionLabel="Go to my services"
+              onAction={() => router.push("/provider-services")}
+            />
+          </Container>
+        </ScrollView>
+      </View>
+    );
+  }
+
   return (
-    <ScreenShell
-      showBack
-      step="Provider calendar"
-      title="Manage availability"
-      subtitle="Add multiple time slots per day. Booked slots turn gray. Overlapping times are blocked automatically."
-    >
-      <Animated.View entering={FadeInDown.duration(400)}>
-        {myServices.length > 1 ? (
-          <View style={styles.serviceRow}>
-            <Text style={styles.label}>Service</Text>
-            <View style={styles.chips}>
-              {myServices.map((s) => (
-                <TouchableOpacity
-                  key={s.id}
-                  style={[styles.chip, selectedServiceId === s.id && styles.chipActive]}
-                  onPress={() => setSelectedServiceId(s.id)}
-                >
-                  <Text
-                    style={[
-                      styles.chipText,
-                      selectedServiceId === s.id && styles.chipTextActive,
-                    ]}
-                    numberOfLines={1}
-                  >
-                    {s.title}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-        ) : null}
-
-        {loading ? (
-          <ActivityIndicator color={PRIMARY} style={{ marginTop: 24 }} />
-        ) : (
-          <BookingCalendar
-            month={month}
-            slots={slots}
-            selectedDate={selectedDate}
-            onSelectDate={setSelectedDate}
-            onChangeMonth={(d) => setMonth(new Date(month.getFullYear(), month.getMonth() + d, 1))}
-            onToggleSlot={onToggle}
+    <View style={styles.screen}>
+      <ScrollView showsVerticalScrollIndicator={false}>
+        <Container style={styles.content}>
+          <PageHeader
+            eyebrow="Provider calendar"
+            title="Manage availability"
+            subtitle="Green slots are open for booking, grey slots are already booked and red slots are blocked by you."
+            onBack={() => router.push("/provider-home")}
+            actions={<Badge label={`${counts.available} open slots`} tone="success" size="md" dot />}
           />
-        )}
 
-        {selectedDate ? (
-          <View style={styles.presetBox}>
-            <Text style={styles.label}>Time slot for {selectedDate}</Text>
-            <View style={styles.chips}>
-              {TIME_PRESETS.map((p) => (
-                <TouchableOpacity
-                  key={p.label}
-                  style={[styles.chip, selectedPreset.label === p.label && styles.chipActive]}
-                  onPress={() => setSelectedPreset(p)}
-                >
-                  <Text
-                    style={[
-                      styles.chipText,
-                      selectedPreset.label === p.label && styles.chipTextActive,
-                    ]}
-                  >
-                    {p.label}
+          <View style={styles.statsRow}>
+            <StatCard label="Open" value={counts.available} icon="calendar" tone="success" hint="Bookable now" />
+            <StatCard label="Booked" value={counts.booked} icon="clock" tone="neutral" hint="Customer appointments" />
+            <StatCard label="Blocked" value={counts.blocked} icon="close" tone="warning" hint="Hidden from customers" />
+          </View>
+
+          <View style={[styles.layout, isDesktop ? styles.layoutDesktop : null]}>
+            <View style={styles.main}>
+              {loading ? (
+                <SkeletonBlock height={380} radiusValue={radius.xl} />
+              ) : (
+                <Animated.View entering={FadeInDown.duration(380)}>
+                  <BookingCalendar
+                    month={month}
+                    slots={slots}
+                    selectedDate={selectedDate}
+                    onSelectDate={setSelectedDate}
+                    onChangeMonth={(delta) =>
+                      setMonth(new Date(month.getFullYear(), month.getMonth() + delta, 1))
+                    }
+                    onToggleSlot={onToggle}
+                  />
+                </Animated.View>
+              )}
+            </View>
+
+            <View style={[styles.rail, isDesktop ? styles.railDesktop : null]}>
+              {myServices.length > 0 ? (
+                <Card padding="lg" style={styles.railCard}>
+                  <Text style={styles.railTitle}>Service</Text>
+                  <Text style={styles.railHint}>
+                    Availability is stored per service.
                   </Text>
-                </TouchableOpacity>
-              ))}
+                  <View style={styles.chipRow}>
+                    {myServices.map((service) => (
+                      <Chip
+                        key={service.id}
+                        label={service.title}
+                        size="sm"
+                        active={selectedServiceId === service.id}
+                        onPress={() => setSelectedServiceId(service.id)}
+                      />
+                    ))}
+                  </View>
+                  {selectedService ? (
+                    <Text style={styles.railMeta}>
+                      Rs {Number.parseFloat(String(selectedService.price ?? "0")).toFixed(0)} ·{" "}
+                      {selectedService.location}
+                    </Text>
+                  ) : null}
+                </Card>
+              ) : null}
+
+              <Card padding="lg" style={styles.railCard}>
+                <Text style={styles.railTitle}>Add a time slot</Text>
+                <Text style={styles.railHint}>
+                  {selectedDate
+                    ? `Selected day: ${selectedDate}`
+                    : "Tap a day on the calendar to choose when the slot starts."}
+                </Text>
+
+                <View style={styles.chipRow}>
+                  {TIME_PRESETS.map((preset) => (
+                    <Chip
+                      key={preset.label}
+                      label={preset.label}
+                      size="sm"
+                      active={selectedPreset.label === preset.label}
+                      onPress={() => setSelectedPreset(preset)}
+                    />
+                  ))}
+                </View>
+
+                <Button
+                  label="Add slot on selected day"
+                  icon="plus"
+                  fullWidth
+                  loading={adding}
+                  disabled={!selectedDate}
+                  style={{ marginTop: spacing.lg }}
+                  onPress={addTimeSlot}
+                />
+              </Card>
+
+              <Card padding="lg" style={styles.railCard} tone="primary">
+                <Text style={styles.railTitle}>Good to know</Text>
+                <View style={styles.notes}>
+                  {[
+                    "Tap an open slot in the calendar to block it, and tap again to reopen it.",
+                    "Booked slots cannot be blocked — cancel the booking first to free the time.",
+                    "Overlapping times for the same service are rejected automatically.",
+                  ].map((line) => (
+                    <View key={line} style={styles.noteRow}>
+                      <Icon name="info" size={15} color={colors.primaryDark} />
+                      <Text style={styles.noteText}>{line}</Text>
+                    </View>
+                  ))}
+                </View>
+              </Card>
             </View>
           </View>
-        ) : null}
-
-        <TouchableOpacity
-          style={[styles.addBtn, adding && { opacity: 0.6 }]}
-          onPress={addTimeSlot}
-          disabled={adding}
-        >
-          {adding ? (
-            <ActivityIndicator color={PRIMARY} />
-          ) : (
-            <Text style={styles.addText}>+ Add time slot on selected day</Text>
-          )}
-        </TouchableOpacity>
-      </Animated.View>
+        </Container>
+      </ScrollView>
 
       <FeedbackModal
         visible={popup.visible}
@@ -220,42 +301,25 @@ export default function ProviderAvailabilityScreen() {
         message={popup.message}
         onClose={() => setPopup((p) => ({ ...p, visible: false }))}
       />
-    </ScreenShell>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  serviceRow: { marginBottom: 16 },
-  label: { fontSize: 13, fontWeight: "700", color: TEXT, marginBottom: 8 },
-  presetBox: {
-    marginTop: 16,
-    padding: 14,
-    backgroundColor: CARD,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: BORDER,
-  },
-  chips: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  chip: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: TAG_BG,
-    maxWidth: "48%",
-  },
-  chipActive: { backgroundColor: PRIMARY, borderColor: PRIMARY },
-  chipText: { fontSize: 13, fontWeight: "600", color: TEXT },
-  chipTextActive: { color: "#fff" },
-  addBtn: {
-    marginTop: 16,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: PRIMARY,
-    borderRadius: 8,
-    alignItems: "center",
-    backgroundColor: CARD,
-  },
-  addText: { color: PRIMARY, fontWeight: "700" },
+  screen: { flex: 1, backgroundColor: colors.background },
+  content: { paddingTop: spacing.xxl, paddingBottom: spacing.giant },
+  statsRow: { flexDirection: "row", gap: spacing.md, flexWrap: "wrap", marginBottom: spacing.xxl },
+  layout: { gap: spacing.xxl },
+  layoutDesktop: { flexDirection: "row", alignItems: "flex-start" },
+  main: { flex: 1, minWidth: 0 },
+  rail: { width: "100%" },
+  railDesktop: { width: 360, flexShrink: 0, gap: spacing.xxl },
+  railCard: { gap: spacing.sm },
+  railTitle: { ...typography.h4, color: colors.text },
+  railHint: { ...typography.small, color: colors.textMuted },
+  railMeta: { ...typography.caption, color: colors.textSubtle, marginTop: spacing.sm },
+  chipRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginTop: spacing.md },
+  notes: { gap: spacing.sm, marginTop: spacing.sm },
+  noteRow: { flexDirection: "row", gap: spacing.sm, alignItems: "flex-start" },
+  noteText: { flex: 1, ...typography.small, color: colors.textMuted },
 });

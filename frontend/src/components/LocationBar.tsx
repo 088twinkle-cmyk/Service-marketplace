@@ -1,7 +1,18 @@
+/**
+ * LocationBar — city selector + GPS shortcut.
+ *
+ * Kept intentionally compact: it sits directly under the search field at the
+ * top of home/search, and collapses into a horizontally scrollable chip row on
+ * phones so it never overflows.
+ */
 import React from "react";
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from "react-native";
+import { ScrollView, StyleSheet, Text, View } from "react-native";
+
 import type { ServiceCity } from "../utils/geo";
-import { PRIMARY, PRIMARY_LIGHT, CARD, TEXT, TEXT_MUTED, BORDER } from "../theme/colors";
+import { colors, radius, spacing, typography, weight } from "../theme/tokens";
+import Button from "./ui/Button";
+import { Chip } from "./ui/Layout";
+import Icon from "./ui/Icon";
 
 type Props = {
   city: ServiceCity;
@@ -21,22 +32,35 @@ export default function LocationBar({
   return (
     <View style={styles.wrap}>
       <View style={styles.row}>
-        <Text style={styles.label}>📍 Nearest to you</Text>
-        <TouchableOpacity onPress={onUseGps} style={styles.gpsBtn}>
-          <Text style={styles.gpsText}>{usingGps ? "GPS on" : "Use GPS"}</Text>
-        </TouchableOpacity>
+        <View style={styles.labelRow}>
+          <Icon name="pin" size={15} color={colors.primary} />
+          <Text style={styles.label}>
+            {usingGps ? "Using your current location" : `Nearest to ${city}`}
+          </Text>
+        </View>
+
+        <Button
+          label={usingGps ? "GPS on" : "Use GPS"}
+          variant={usingGps ? "secondary" : "outline"}
+          size="sm"
+          icon="pin"
+          onPress={onUseGps}
+        />
       </View>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.chips}
+      >
         {cities.map((c) => (
-          <TouchableOpacity
+          <Chip
             key={c}
+            label={c}
+            active={city === c && !usingGps}
             onPress={() => onSelectCity(c)}
-            style={[styles.chip, city === c && !usingGps && styles.chipActive]}
-          >
-            <Text style={[styles.chipText, city === c && !usingGps && styles.chipTextActive]}>
-              {c}
-            </Text>
-          </TouchableOpacity>
+            size="sm"
+          />
         ))}
       </ScrollView>
     </View>
@@ -45,40 +69,21 @@ export default function LocationBar({
 
 const styles = StyleSheet.create({
   wrap: {
-    marginHorizontal: 16,
-    marginTop: 12,
-    padding: 14,
-    backgroundColor: PRIMARY_LIGHT,
-    borderRadius: 14,
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    padding: spacing.md,
+    gap: spacing.md,
   },
   row: {
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 10,
+    justifyContent: "space-between",
+    gap: spacing.md,
+    flexWrap: "wrap",
   },
-  label: { fontSize: 14, fontWeight: "700", color: TEXT },
-  gpsBtn: {
-    backgroundColor: CARD,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: PRIMARY,
-  },
-  gpsText: { fontSize: 12, fontWeight: "700", color: PRIMARY },
-  chip: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
-    backgroundColor: CARD,
-    marginRight: 8,
-    borderWidth: 1,
-    borderColor: BORDER,
-  },
-  chipActive: { backgroundColor: PRIMARY, borderColor: PRIMARY },
-  chipText: { fontSize: 13, fontWeight: "600", color: TEXT_MUTED },
-  chipTextActive: { color: "#fff" },
+  labelRow: { flexDirection: "row", alignItems: "center", gap: spacing.xs, flexShrink: 1 },
+  label: { ...typography.smallStrong, color: colors.text, flexShrink: 1 },
+  chips: { gap: spacing.sm, paddingRight: spacing.sm },
 });

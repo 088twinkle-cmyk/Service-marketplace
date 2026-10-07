@@ -13,8 +13,14 @@
  * pagination unwrapping, field names, status keys, multipart uploads and the
  * full reverse-bidding → payment → chat → completion flow.
  */
+import React from "react";
 import { beforeAll, describe, expect, it } from "vitest";
 
+import { act, renderAt, type RenderResult } from "../test/render";
+import HomeScreen from "../screens/customer/HomeScreen";
+import SearchScreen from "../screens/customer/SearchScreen";
+import CustomerDashboardScreen from "../screens/customer/CustomerDashboardScreen";
+import ProviderHomeScreen from "../screens/provider/ProviderHomeScreen";
 import { api } from "../services/api/client";
 import { authApi } from "../services/api/authApi";
 import { bookingsApi } from "../services/api/bookingsApi";
@@ -37,6 +43,18 @@ async function signInAs(credentials: { email: string; password: string }) {
   await setItem(StorageKeys.USERNAME, user.username);
   await setItem(StorageKeys.EMAIL, user.email);
   return { access, refresh, user };
+}
+
+/** Mount a screen against the live API and let its data settle. */
+async function renderLive(ui: React.ReactElement, waitMs = 1600): Promise<RenderResult> {
+  let view!: RenderResult;
+  await act(async () => {
+    view = renderAt(ui);
+  });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
+  });
+  return view;
 }
 
 async function signOut() {
@@ -267,6 +285,37 @@ describe("live marketplace", () => {
     expect(notifications.data.count).toBeGreaterThan(0);
 
     void providerSession;
+  });
+
+  it("renders the redesigned screens with live marketplace data", async () => {
+    // ---------- public catalog screens ----------
+    await signOut();
+    const catalog = await servicesApi.list();
+    expect(catalog.length).toBeGreaterThan(0);
+    const liveTitle = catalog[0].title;
+
+    const home = await renderLive(<HomeScreen />);
+    const homeText = home.text();
+    expect(homeText).toContain("Find the Right Professional for Your Service");
+    expect(homeText).toContain(liveTitle);
+
+    const search = await renderLive(<SearchScreen />);
+    expect(search.text()).toContain("Browse services");
+    expect(search.text()).toContain(liveTitle);
+
+    // ---------- customer dashboard ----------
+    await signInAs(CUSTOMER);
+    const dashboard = await renderLive(<CustomerDashboardScreen />);
+    const dashboardText = dashboard.text();
+    expect(dashboardText).toContain("Welcome back");
+    expect(dashboardText).toContain("anita_customer");
+
+    // ---------- provider dashboard ----------
+    await signInAs(PROVIDER);
+    const providerHome = await renderLive(<ProviderHomeScreen />);
+    const providerText = providerHome.text();
+    expect(providerText).toContain("Welcome back");
+    expect(providerText).toMatch(/Verified|verification/i);
   });
 });
 

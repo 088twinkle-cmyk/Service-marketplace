@@ -30,6 +30,7 @@ import ProviderOnboardingScreen from "./screens/provider/ProviderOnboardingScree
 import ProviderServicesScreen from "./screens/provider/ProviderServicesScreen";
 
 import NotFoundScreen from "./screens/shared/NotFoundScreen";
+import ProviderProfileScreen from "./screens/shared/ProviderProfileScreen";
 
 export default function AppRoutes() {
   return (
@@ -44,6 +45,7 @@ export default function AppRoutes() {
       <Route path="/reset-password" element={<ResetPasswordScreen />} />
       <Route path="/search" element={<SearchScreen />} />
       <Route path="/service/:id" element={<ServiceDetailScreen />} />
+      <Route path="/provider/:id" element={<ProviderProfileScreen />} />
 
       {/* Customer */}
       <Route path="/choose-services" element={<ChooseServicesScreen />} />

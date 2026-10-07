@@ -12,6 +12,10 @@ const BACKEND = process.env.VITE_BACKEND_ORIGIN || "http://127.0.0.1:8001";
  */
 const shims = {
   "react-native": "react-native-web",
+  // Browser-only router shim. It must live here (Vite), never in
+  // tsconfig.json: Metro (Expo) honours tsconfig `paths`, and mapping
+  // `expo-router` there would make the native/Expo build load this shim and
+  // call `useNavigate()` outside of a React Router context.
   "expo-router": path.resolve(__dirname, "src/shims/expo-router.tsx"),
   "expo-image": path.resolve(__dirname, "src/shims/expo-image.tsx"),
   "expo-image-picker": path.resolve(__dirname, "src/shims/expo-image-picker.ts"),

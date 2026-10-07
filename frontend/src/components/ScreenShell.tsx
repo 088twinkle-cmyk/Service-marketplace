@@ -1,8 +1,17 @@
+/**
+ * ScreenShell — the page frame for inner screens.
+ *
+ * Provides the responsive content column, the page header (eyebrow + title +
+ * description + actions) and a consistent vertical rhythm. `step` is kept for
+ * backwards compatibility and rendered as the header eyebrow.
+ */
 import React from "react";
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet } from "react-native";
-import { useRouter } from "expo-router";
+import { ScrollView, StyleSheet, View, type StyleProp, type ViewStyle } from "react-native";
 import Animated, { FadeInDown } from "react-native-reanimated";
-import { BACKGROUND, PRIMARY, TEXT, TEXT_MUTED } from "../theme/colors";
+
+import { colors, spacing } from "../theme/tokens";
+import { Container } from "./ui/Layout";
+import PageHeader from "./ui/PageHeader";
 
 type Props = {
   step?: string;
@@ -11,6 +20,13 @@ type Props = {
   children: React.ReactNode;
   scroll?: boolean;
   showBack?: boolean;
+  /** Right-hand header actions (buttons, filters). */
+  actions?: React.ReactNode;
+  /** `narrow` for forms, `full` for edge-to-edge dashboards. */
+  width?: "content" | "narrow" | "full";
+  onBack?: () => void;
+  style?: StyleProp<ViewStyle>;
+  contentStyle?: StyleProp<ViewStyle>;
 };
 
 export default function ScreenShell({
@@ -20,40 +36,49 @@ export default function ScreenShell({
   children,
   scroll = true,
   showBack,
+  actions,
+  width = "content",
+  onBack,
+  style,
+  contentStyle,
 }: Props) {
-  const router = useRouter();
   const body = (
-    <Animated.View entering={FadeInDown.duration(450).springify()} style={styles.inner}>
-      {step ? <Text style={styles.step}>{step}</Text> : null}
-      {showBack ? (
-        <TouchableOpacity onPress={() => router.back()} style={styles.back}>
-          <Text style={styles.backText}>← Back</Text>
-        </TouchableOpacity>
-      ) : null}
-      <Text style={styles.title}>{title}</Text>
-      {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+    <Animated.View entering={FadeInDown.duration(380)}>
+      <PageHeader
+        eyebrow={step}
+        title={title}
+        subtitle={subtitle}
+        onBack={showBack ? onBack : undefined}
+        actions={actions}
+      />
       {children}
     </Animated.View>
   );
 
-  if (scroll) {
+  if (!scroll) {
     return (
-      <ScrollView style={styles.screen} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        {body}
-      </ScrollView>
+      <View style={[styles.screen, style]}>
+        <Container width={width} style={[styles.staticPadding, contentStyle]}>
+          {body}
+        </Container>
+      </View>
     );
   }
 
-  return <View style={[styles.screen, styles.content]}>{body}</View>;
+  return (
+    <ScrollView
+      style={[styles.screen, style]}
+      contentContainerStyle={[styles.scrollPadding, contentStyle]}
+      keyboardShouldPersistTaps="handled"
+      showsVerticalScrollIndicator={false}
+    >
+      <Container width={width}>{body}</Container>
+    </ScrollView>
+  );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: BACKGROUND },
-  content: { padding: 20, paddingBottom: 40 },
-  inner: { flex: 1 },
-  back: { marginBottom: 8 },
-  backText: { color: PRIMARY, fontWeight: "600", fontSize: 15 },
-  step: { fontSize: 12, color: TEXT_MUTED, fontWeight: "600", letterSpacing: 0.3 },
-  title: { fontSize: 24, fontWeight: "800", color: TEXT, marginTop: 8, marginBottom: 6 },
-  subtitle: { fontSize: 15, color: TEXT_MUTED, lineHeight: 22, marginBottom: 20 },
+  screen: { flex: 1, backgroundColor: colors.background },
+  scrollPadding: { paddingTop: spacing.xxl, paddingBottom: spacing.giant },
+  staticPadding: { paddingTop: spacing.xxl, paddingBottom: spacing.giant },
 });
