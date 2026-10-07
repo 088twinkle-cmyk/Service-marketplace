@@ -5,12 +5,18 @@ import { Platform } from "react-native";
 const FALLBACK_HOST = "192.168.1.88";
 export const API_PORT = 8001;
 
+type DebuggerHostCarrier = { debuggerHost?: string | null } | null | undefined;
+
 function hostFromExpo(): string | null {
-  const go = Constants.expoGoConfig?.debuggerHost;
+  const constants = Constants as unknown as {
+    expoGoConfig?: DebuggerHostCarrier;
+    manifest?: DebuggerHostCarrier;
+  };
+
+  const go = constants.expoGoConfig?.debuggerHost;
   if (go) return go.split(":")[0];
 
-  const legacy = (Constants as { manifest?: { debuggerHost?: string } }).manifest
-    ?.debuggerHost;
+  const legacy = constants.manifest?.debuggerHost;
   if (legacy) return legacy.split(":")[0];
 
   return null;
@@ -41,7 +47,10 @@ export function getApiBaseUrl(): string {
   }
 
   if (Platform.OS === "web") {
-    return `http://127.0.0.1:${API_PORT}/`;
+    // Same-origin: the dev server (or production host) proxies /api and
+    // /media to Django, so the app also works behind a preview URL or from a
+    // phone on the LAN.
+    return "/";
   }
 
   return `http://${FALLBACK_HOST}:${API_PORT}/`;

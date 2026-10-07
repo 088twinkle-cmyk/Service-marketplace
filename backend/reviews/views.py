@@ -14,6 +14,13 @@ from .models import Dispute, Report, Review
 
 
 class ReviewSerializer(serializers.ModelSerializer):
+    customer_name = serializers.SerializerMethodField()
+    provider = serializers.IntegerField(source="freelancer_id", read_only=True)
+    provider_name = serializers.SerializerMethodField()
+    service_title = serializers.SerializerMethodField()
+    booking_title = serializers.CharField(source="booking.title", read_only=True)
+    rating = serializers.IntegerField(min_value=1, max_value=5)
+
     class Meta:
         model = Review
         fields = "__all__"
@@ -26,10 +33,42 @@ class ReviewSerializer(serializers.ModelSerializer):
             "updated_at",
         )
 
+    def get_customer_name(self, obj):
+        user = obj.reviewer
+        if not user:
+            return ""
+        return user.get_full_name() or user.username or user.email
+
+    def get_provider_name(self, obj):
+        freelancer = obj.freelancer
+        if not freelancer:
+            return ""
+        user = freelancer.user
+        return (
+            user.get_full_name()
+            or freelancer.professional_title
+            or user.username
+        )
+
+    def get_service_title(self, obj):
+        booking = obj.booking
+        if booking and booking.service:
+            return booking.service.title
+        return booking.title if booking else ""
+
     def validate_rating(self, value):
         if value < 1 or value > 5:
             raise serializers.ValidationError("Rating must be 1-5.")
         return value
+
+    def validate(self, attrs):
+        if self.instance is None and not (
+            self.initial_data.get("booking")
+        ):
+            raise serializers.ValidationError(
+                {"booking": "A review must reference the booking it belongs to."}
+            )
+        return attrs
 
 
 class DisputeSerializer(serializers.ModelSerializer):
@@ -81,21 +120,41 @@ class ReviewViewSet(viewsets.ModelViewSet):
         "rating",
         "is_visible",
     ]
+    ordering_fields = ["created_at", "rating"]
 
     def get_queryset(self):
         qs = Review.objects.select_related(
             "booking",
-            "freelancer",
+            "booking__service",
+            "freelancer__user",
             "reviewer",
         )
 
-        if (
-            self.request.user.role == User.Role.ADMIN
-            or self.request.user.is_staff
-        ):
-            return qs
+        user = self.request.user
+        params = self.request.query_params
 
-        return qs.filter(is_visible=True)
+        if user.is_authenticated and (
+            user.is_staff or user.role == User.Role.ADMIN
+        ):
+            pass
+        else:
+            qs = qs.filter(is_visible=True)
+
+        provider = params.get("provider") or params.get("freelancer")
+        if provider:
+            qs = qs.filter(freelancer_id=provider)
+
+        service = params.get("service")
+        if service:
+            qs = qs.filter(booking__service_id=service)
+
+        return qs.order_by("-created_at")
+
+    def get_permissions(self):
+        # Reviews are public information: anyone browsing a provider can read them.
+        if self.action in ("list", "retrieve"):
+            return [permissions.AllowAny()]
+        return [permissions.IsAuthenticated(), IsOTPVerified()]
 
     def create(self, request, *args, **kwargs):
         booking = get_object_or_404(
@@ -108,25 +167,25 @@ class ReviewViewSet(viewsets.ModelViewSet):
 
         if booking.client.user_id != request.user.id:
             return Response(
-                {"detail": "Only the client can review."},
+                {"error": "Only the client can review."},
                 status=403,
             )
 
         if booking.status != ProjectBooking.Status.COMPLETED:
             return Response(
-                {"detail": "Only completed projects can be reviewed."},
+                {"error": "Only completed projects can be reviewed."},
                 status=400,
             )
 
         if hasattr(booking, "review"):
             return Response(
-                {"detail": "Review already exists."},
+                {"error": "Review already exists."},
                 status=400,
             )
 
         if not booking.freelancer:
             return Response(
-                {"detail": "No freelancer on this booking."},
+                {"error": "No freelancer on this booking."},
                 status=400,
             )
 
@@ -153,8 +212,17 @@ class ReviewViewSet(viewsets.ModelViewSet):
             booking.freelancer
         )
 
+        from notifications.services import EVENT_REVIEW, notify
+
+        notify(
+            booking.freelancer.user,
+            "New review received",
+            f"You received a {review.rating}-star review for “{booking.title}”.",
+            EVENT_REVIEW,
+        )
+
         return Response(
-            ReviewSerializer(review).data,
+            ReviewSerializer(review, context={"request": request}).data,
             status=201,
         )
 
@@ -288,7 +356,7 @@ class DisputeViewSet(viewsets.ModelViewSet):
 
             except Exception as exc:
                 return Response(
-                    {"detail": str(exc)},
+                    {"error": str(exc)},
                     status=400,
                 )
 

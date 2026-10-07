@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import hmac
+import logging
 import uuid
 from decimal import Decimal
 
@@ -12,7 +13,15 @@ from django.utils import timezone
 from bookings.models import ProjectBooking
 from bookings.state_machine import transition
 
+from notifications.services import (
+    EVENT_PAYMENT_FAILED,
+    EVENT_PAYMENT_SUCCESS,
+    notify,
+)
+
 from .models import LedgerTransaction, Payment
+
+logger = logging.getLogger("marketplace")
 
 
 def _signed_payload(total_amount, transaction_uuid, product_code):
@@ -122,6 +131,32 @@ def esewa_form_fields(payment: Payment):
     }
 
 
+def sandbox_credentials_absent() -> bool:
+    """
+    True only while the deployment is still on the public eSewa test
+    credentials (or none at all).
+
+    The sandbox override exists so that developers without eSewa merchant
+    credentials can still exercise the booking → payment → confirmed flow.
+    As soon as a real merchant code is configured the override can never
+    fire again, so production can never be tricked into a fake success.
+    """
+    merchant_code = (settings.ESEWA_MERCHANT_CODE or "").strip()
+
+    return merchant_code in ("", "EPAYTEST")
+
+
+def sandbox_override_allowed(payload: dict | None = None) -> bool:
+    payload = payload or {}
+
+    return bool(
+        settings.DEBUG
+        and settings.ESEWA_TRUST_SANDBOX_SUCCESS
+        and sandbox_credentials_absent()
+        and payload.get("force_success")
+    )
+
+
 def verify_esewa(
     payment: Payment,
     gateway_ref: str = "",
@@ -166,18 +201,17 @@ def verify_esewa(
             "client": payload,
         }
 
-        ok = bool(
-            settings.DEBUG
-            and settings.ESEWA_TRUST_SANDBOX_SUCCESS
-            and payload.get("force_success")
-        )
+        ok = sandbox_override_allowed(payload)
 
-    if (
-        not ok
-        and settings.DEBUG
-        and settings.ESEWA_TRUST_SANDBOX_SUCCESS
-        and payload.get("force_success")
-    ):
+    if not ok and sandbox_override_allowed(payload):
+        logger.warning(
+            "SANDBOX PAYMENT OVERRIDE: payment %s marked successful because "
+            "DEBUG + ESEWA_TRUST_SANDBOX_SUCCESS are on, no real eSewa "
+            "merchant credentials are configured and the client asked to "
+            "force success. Configure ESEWA_MERCHANT_CODE/ESEWA_SECRET_KEY "
+            "for a real gateway (the override is disabled automatically).",
+            payment.pk,
+        )
         ok = True
 
     with transaction.atomic():
@@ -203,6 +237,21 @@ def verify_esewa(
                 ]
             )
 
+            logger.warning(
+                "Payment %s for booking %s FAILED (gateway status=%s)",
+                payment.pk,
+                payment.booking_id,
+                (payment.raw_payload or {}).get("status_api"),
+            )
+
+            if payment.payer:
+                notify(
+                    payment.payer,
+                    "Payment failed",
+                    f"Your payment of Rs {payment.amount} could not be completed. You can try again.",
+                    EVENT_PAYMENT_FAILED,
+                )
+
             booking = payment.booking
 
             if booking.status == ProjectBooking.Status.PAYMENT_PENDING:
@@ -222,6 +271,13 @@ def mark_success(
     payment: Payment,
     gateway_ref: str = "",
 ):
+    logger.info(
+        "Payment %s SUCCESS for booking %s (amount=%s, ref=%s)",
+        payment.pk,
+        payment.booking_id,
+        payment.amount,
+        gateway_ref or payment.gateway_ref,
+    )
     payment.status = Payment.Status.SUCCESS
     payment.gateway_ref = (
         gateway_ref or payment.gateway_ref
@@ -277,12 +333,26 @@ def mark_success(
             ]
         )
 
-    # Your Django app is named "chats", not "chat".
+    # Chat becomes available once the booking is paid and confirmed.
     from chats.models import Conversation
 
-    Conversation.objects.get_or_create(
-        booking=booking
-    )
+    Conversation.objects.get_or_create(booking=booking)
+
+    if payment.payer:
+        notify(
+            payment.payer,
+            "Payment confirmed",
+            f"Payment of Rs {payment.amount} for “{booking.title}” was successful. "
+            "The booking is confirmed and you can now chat with your provider.",
+            EVENT_PAYMENT_SUCCESS,
+        )
+    if booking.freelancer:
+        notify(
+            booking.freelancer.user,
+            "Booking confirmed",
+            f"“{booking.title}” is confirmed and paid. You can start the work.",
+            EVENT_PAYMENT_SUCCESS,
+        )
 
 
 def settle_booking(booking: ProjectBooking):

@@ -105,12 +105,20 @@ export default function LoginScreen() {
       });
 
       if (otp_required || !user.is_otp_verified) {
+        const hint =
+          __DEV__ && debug_otp
+            ? `Development OTP: ${debug_otp}`
+            : "We emailed you a 6-digit code.";
+
         showPopup(
           "info",
           "Email verification required",
-          __DEV__ && debug_otp
-            ? `Please verify your email with the OTP code. Development OTP: ${debug_otp}`
-            : "Please verify your email before continuing."
+          hint,
+          () =>
+            router.replace({
+              pathname: "/otp",
+              params: { email: user.email ?? email.trim().toLowerCase() },
+            } as never)
         );
         return;
       }

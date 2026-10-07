@@ -13,3 +13,12 @@ class Notification(models.Model):
     event_type = models.CharField(max_length=50)
     is_read = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["user", "is_read"]),
+        ]
+
+    def __str__(self):
+        return f"{self.event_type}: {self.title}"

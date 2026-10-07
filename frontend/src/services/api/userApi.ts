@@ -5,6 +5,8 @@ export type UserProfile = {
   username: string;
   email: string;
   role: string;
+  /** Lowercased role helper returned by the API: customer | provider | admin. */
+  role_key?: string;
   phone: string | null;
 
   is_otp_verified?: boolean;

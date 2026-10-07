@@ -5,6 +5,9 @@ from rest_framework_simplejwt.views import TokenRefreshView
 
 from .views import (
     ChangePasswordView,
+    PasswordForgotView,
+    PasswordResetView,
+    UsernameAvailableView,
     ClientProfileView,
     FreelancerProfileView,
     FreelancerPublicViewSet,
@@ -98,6 +101,24 @@ urlpatterns = [
         "password/change/",
         ChangePasswordView.as_view(),
         name="password-change",
+    ),
+
+    path(
+        "password/forgot/",
+        PasswordForgotView.as_view(),
+        name="password-forgot",
+    ),
+
+    path(
+        "password/reset/",
+        PasswordResetView.as_view(),
+        name="password-reset",
+    ),
+
+    path(
+        "username-available/",
+        UsernameAvailableView.as_view(),
+        name="username-available",
     ),
 
     # Role-specific profiles

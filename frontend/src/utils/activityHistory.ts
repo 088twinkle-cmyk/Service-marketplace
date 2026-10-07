@@ -1,6 +1,7 @@
 import { getItem, setItem, StorageKeys } from "./storage";
 
 export type ViewedService = {
+  is_mine?: boolean;
   id: number;
   title: string;
   provider_name?: string;
@@ -33,12 +34,14 @@ export async function trackServiceView(service: {
   id: number;
   title: string;
   provider_name?: string;
+  is_mine?: boolean;
 }): Promise<void> {
   const list = await readJson<ViewedService>(StorageKeys.VIEWED_SERVICES);
   const entry: ViewedService = {
     id: service.id,
     title: service.title,
     provider_name: service.provider_name,
+    is_mine: Boolean(service.is_mine),
     viewedAt: new Date().toISOString(),
   };
   const filtered = list.filter((x) => x.id !== service.id);

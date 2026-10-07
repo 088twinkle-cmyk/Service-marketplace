@@ -1,4 +1,4 @@
-import { api } from "./client";
+import { api, unwrapList } from "./client";
 
 export type ReviewItem = {
   id: number;
@@ -13,10 +13,10 @@ export type ReviewItem = {
 export const reviewsApi = {
   byProvider: (providerId: number) =>
     api
-      .get<ReviewItem[]>("api/reviews/", { params: { provider: providerId } })
-      .then((r) => (Array.isArray(r.data) ? r.data : [])),
+      .get("api/reviews/", { params: { provider: providerId } })
+      .then((r) => unwrapList<ReviewItem>(r.data)),
   byService: (serviceId: number) =>
     api
-      .get<ReviewItem[]>("api/reviews/", { params: { service: serviceId } })
-      .then((r) => (Array.isArray(r.data) ? r.data : [])),
+      .get("api/reviews/", { params: { service: serviceId } })
+      .then((r) => unwrapList<ReviewItem>(r.data)),
 };

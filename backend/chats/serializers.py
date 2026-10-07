@@ -60,6 +60,7 @@ class MessageSerializer(serializers.ModelSerializer):
 
 class ConversationSerializer(serializers.ModelSerializer):
     messages = MessageSerializer(many=True, read_only=True)
+    chat_available = serializers.SerializerMethodField()
     booking_title = serializers.CharField(
         source="booking.title",
         read_only=True,
@@ -77,6 +78,7 @@ class ConversationSerializer(serializers.ModelSerializer):
     last_message = serializers.SerializerMethodField()
     unread_count = serializers.SerializerMethodField()
     is_active = serializers.SerializerMethodField()
+    chat_available = serializers.SerializerMethodField()
 
     class Meta:
         model = Conversation
@@ -92,6 +94,7 @@ class ConversationSerializer(serializers.ModelSerializer):
             "last_message",
             "unread_count",
             "is_active",
+            "chat_available",
             "created_at",
             "messages",
         ]
@@ -142,18 +145,14 @@ class ConversationSerializer(serializers.ModelSerializer):
         if not user:
             return ""
 
-        profile = getattr(user, "clientprofile", None)
-
-        if profile is None:
-            profile = getattr(user, "freelancerprofile", None)
+        profile = getattr(user, "client_profile", None) or getattr(
+            user, "freelancer_profile", None
+        )
 
         if profile is None:
             return ""
 
-        photo = getattr(profile, "profile_photo", None)
-
-        if not photo:
-            photo = getattr(profile, "photo", None)
+        photo = getattr(profile, "avatar", None)
 
         if not photo:
             return ""
@@ -214,3 +213,8 @@ class ConversationSerializer(serializers.ModelSerializer):
             "COMPLETED",
             "REVIEWED",
         ]
+
+    def get_chat_available(self, obj):
+        from bookings.services import booking_can_chat
+
+        return booking_can_chat(obj.booking)

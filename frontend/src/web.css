@@ -1,0 +1,67 @@
+/* Web-only layout rules. Native builds ignore this file. */
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: #f8fafc;
+  color: #0f172a;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  display: flex;
+  flex-direction: column;
+  /* dvh keeps mobile browser chrome from cutting off the layout */
+  min-height: 100dvh;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* react-native-web renders text inside its own nodes; make sure long words
+   never push the layout wider than the viewport. */
+#root,
+#root * {
+  max-width: 100%;
+  overflow-wrap: break-word;
+}
+
+input,
+textarea,
+select,
+button {
+  font-family: inherit;
+}
+
+/* Skeleton pulse used by the reanimated web shim. */
+@keyframes rnm-skeleton-pulse {
+  0% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.45;
+  }
+}
+
+/* Thin scrollbars on desktop, hidden on touch devices. */
+@media (hover: hover) and (pointer: fine) {
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}

@@ -6,8 +6,13 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.contrib.auth import authenticate
+from django.contrib.auth.password_validation import validate_password
+from django.contrib.auth.tokens import default_token_generator
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.mail import send_mail
 from django.utils import timezone
+from django.utils.encoding import force_bytes, force_str
+from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 
 from rest_framework import (
     generics,
@@ -15,6 +20,8 @@ from rest_framework import (
     status,
     viewsets,
 )
+from rest_framework.views import APIView
+from rest_framework.throttling import ScopedRateThrottle
 
 from rest_framework.decorators import (
     action,
@@ -25,6 +32,14 @@ from rest_framework.decorators import (
 from rest_framework.response import Response
 
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.token_blacklist.models import (
+    BlacklistedToken,
+    OutstandingToken,
+)
+
+import logging
+
+logger = logging.getLogger("marketplace")
 
 from .models import (
     ClientProfile,
@@ -45,6 +60,7 @@ from .serializers import (
     FreelancerProfileSerializer,
     KYCReviewSerializer,
     KYCSerializer,
+    KYCSummarySerializer,
     LoginSerializer,
     OTPRequestSerializer,
     OTPVerifySerializer,
@@ -66,14 +82,14 @@ def _hash_otp(code: str) -> str:
     ).hexdigest()
 
 
-def issue_tokens(user: User):
+def issue_tokens(user: User, request=None):
     refresh = RefreshToken.for_user(user)
     refresh["role"] = user.role
 
     return {
         "refresh": str(refresh),
         "access": str(refresh.access_token),
-        "user": UserSerializer(user).data,
+        "user": UserSerializer(user, context={"request": request}).data,
     }
 
 
@@ -141,7 +157,7 @@ class RegisterView(generics.CreateAPIView):
             purpose="register",
         )
 
-        payload = issue_tokens(user)
+        payload = issue_tokens(user, request)
 
         if settings.OTP_DEBUG_RETURN:
             payload["debug_otp"] = code
@@ -200,12 +216,12 @@ class LoginView(generics.GenericAPIView):
         ):
             return Response(
                 {
-                    "detail": "Invalid credentials."
+                    "error": "Invalid credentials."
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        payload = issue_tokens(user)
+        payload = issue_tokens(user, request)
 
         if not user.is_otp_verified:
             code = send_otp(user)
@@ -232,7 +248,7 @@ class OTPRequestView(generics.GenericAPIView):
         code = send_otp(request.user)
 
         data = {
-            "detail": "OTP sent.",
+            "error": "OTP sent.",
         }
 
         if settings.OTP_DEBUG_RETURN:
@@ -281,7 +297,7 @@ class OTPVerifyView(generics.GenericAPIView):
         ):
             return Response(
                 {
-                    "detail": (
+                    "error": (
                         "Invalid or expired OTP."
                     )
                 },
@@ -319,7 +335,8 @@ class OTPVerifyView(generics.GenericAPIView):
 ])
 def me(request):
     data = UserSerializer(
-        request.user
+        request.user,
+        context={"request": request},
     ).data
 
     if request.user.role == User.Role.CLIENT:
@@ -355,8 +372,9 @@ def me(request):
         data["freelancer_profile"] = profile_data
 
         if hasattr(profile, "kyc"):
-            data["kyc"] = KYCSerializer(
-                profile.kyc
+            data["kyc"] = KYCSummarySerializer(
+                profile.kyc,
+                context={"request": request},
             ).data
 
     return Response(data)
@@ -406,7 +424,7 @@ class ProfileUpdateView(
         user = request.user
         profile = self.get_profile(user)
 
-        data = UserSerializer(user).data
+        data = UserSerializer(user, context={"request": request}).data
 
         if profile is not None:
             if user.role == User.Role.CLIENT:
@@ -615,7 +633,7 @@ class ProfilePhotoView(
         if profile is None:
             return Response(
                 {
-                    "detail": "Profile not available."
+                    "error": "Profile not available."
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
@@ -630,7 +648,7 @@ class ProfilePhotoView(
         if image is None:
             return Response(
                 {
-                    "detail": (
+                    "error": (
                         "No profile picture was uploaded."
                     )
                 },
@@ -699,7 +717,7 @@ class ProfilePhotoDeleteView(
         if profile is None:
             return Response(
                 {
-                    "detail": "Profile not available."
+                    "error": "Profile not available."
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
@@ -717,7 +735,7 @@ class ProfilePhotoDeleteView(
 
         return Response(
             {
-                "detail": (
+                "error": (
                     "Profile picture deleted."
                 )
             }
@@ -884,6 +902,13 @@ class KYCViewSet(
 ):
     serializer_class = KYCSerializer
 
+    def get_serializer_class(self):
+        # Writes go through the validating KYC serializer; reads use the
+        # status payload (which includes the reviewer and document URLs).
+        if self.action in ("create", "update", "partial_update"):
+            return KYCSerializer
+        return KYCSummarySerializer
+
     permission_classes = [
         permissions.IsAuthenticated,
         IsOTPVerified,
@@ -896,6 +921,7 @@ class KYCViewSet(
                 "freelancer__user",
                 "reviewed_by",
             )
+            .order_by("-submitted_at")
         )
 
         user = self.request.user
@@ -932,7 +958,7 @@ class KYCViewSet(
         ).exists():
             raise serializers.ValidationError(
                 {
-                    "detail": (
+                    "error": (
                         "KYC already exists "
                         "for this freelancer."
                     )
@@ -985,7 +1011,7 @@ class KYCViewSet(
         ):
             return Response(
                 {
-                    "detail": (
+                    "error": (
                         "Rejection reason is required "
                         "when rejecting KYC."
                     )
@@ -1015,5 +1041,162 @@ class KYCViewSet(
         )
 
         return Response(
-            KYCSerializer(kyc).data
+            KYCSummarySerializer(kyc, context={"request": request}).data
         )
+
+# ============================================================
+# Password reset (uid + token, emailed to the account address)
+# ============================================================
+
+class PasswordForgotView(APIView):
+    """Request a password reset token.
+
+    Always answers with the same message so the endpoint cannot be used to
+    discover which email addresses have accounts.
+    """
+
+    permission_classes = [permissions.AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "otp"
+
+    def post(self, request):
+        email = str(request.data.get("email", "")).strip().lower()
+        if not email:
+            return Response(
+                {"error": "Email is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        response_payload = {
+            "message": (
+                "If that email is registered, a reset link and token "
+                "have been sent."
+            )
+        }
+
+        user = User.objects.filter(email__iexact=email, is_active=True).first()
+
+        if user:
+            uid = urlsafe_base64_encode(force_bytes(user.pk))
+            token = default_token_generator.make_token(user)
+
+            send_mail(
+                subject="Reset your marketplace password",
+                message=(
+                    "We received a request to reset your password.\n\n"
+                    f"User ID: {uid}\n"
+                    f"Reset token: {token}\n\n"
+                    "Open the app, choose \"Reset password\" and paste both "
+                    "values. If you did not request this, you can ignore this "
+                    "email.\n"
+                ),
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[user.email],
+                fail_silently=True,
+            )
+
+            if settings.OTP_DEBUG_RETURN:
+                # Local development only (DEBUG). Saves developers from
+                # reading the console email backend output.
+                response_payload["uid"] = uid
+                response_payload["debug_token"] = token
+
+            logger.info("Password reset requested for user=%s", user.pk)
+
+        return Response(response_payload)
+
+
+class PasswordResetView(APIView):
+    """Complete a password reset with the emailed uid + token."""
+
+    permission_classes = [permissions.AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "otp"
+
+    def post(self, request):
+        uid = str(request.data.get("uid", "")).strip()
+        token = str(request.data.get("token", "")).strip()
+        new_password = request.data.get("new_password") or request.data.get(
+            "password"
+        )
+        email = str(request.data.get("email", "")).strip().lower()
+
+        if not uid or not token or not new_password:
+            return Response(
+                {"error": "User ID, token and new password are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            validate_password(new_password)
+        except DjangoValidationError as exc:
+            return Response(
+                {"error": exc.messages[0]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            user_id = force_str(urlsafe_base64_decode(uid))
+            user = User.objects.get(pk=user_id, is_active=True)
+        except (User.DoesNotExist, ValueError, TypeError, OverflowError):
+            return Response(
+                {"error": "This reset link is invalid."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if email and user.email.lower() != email:
+            return Response(
+                {"error": "This reset link is invalid."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not default_token_generator.check_token(user, token):
+            return Response(
+                {"error": "This reset link is invalid or has expired."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user.set_password(new_password)
+        user.save(update_fields=["password"])
+
+        # Every existing session must be signed out.
+        for outstanding in OutstandingToken.objects.filter(user=user):
+            BlacklistedToken.objects.get_or_create(token=outstanding)
+
+        logger.info("Password reset completed for user=%s", user.pk)
+
+        return Response({"message": "Your password has been reset. Please sign in."})
+
+
+class UsernameAvailableView(APIView):
+    """Check whether a username is still free (used by the signup form)."""
+
+    permission_classes = [permissions.AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "otp"
+
+    def _check(self, request):
+        username = str(
+            request.data.get("username") or request.query_params.get("username") or ""
+        ).strip()
+
+        if not username:
+            return Response(
+                {"error": "Username is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            {
+                "username": username,
+                "available": not User.objects.filter(
+                    username__iexact=username
+                ).exists(),
+            }
+        )
+
+    def get(self, request):
+        return self._check(request)
+
+    def post(self, request):
+        return self._check(request)

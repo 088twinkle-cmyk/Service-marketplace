@@ -176,11 +176,7 @@ export default function CustomerDashboardScreen() {
                       style={styles.row}
                       onPress={async () => {
                         const auth = await getAuth();
-                        if (
-                          auth.role?.toLowerCase() === "provider" &&
-                          auth.username &&
-                          v.provider_name === auth.username
-                        ) {
+                        if (auth.role?.toLowerCase() === "provider" && v.is_mine) {
                           router.replace("/provider-services");
                           return;
                         }

@@ -14,10 +14,16 @@ ALLOWED_HOSTS = [
     h.strip()
     for h in os.getenv(
         "DJANGO_ALLOWED_HOSTS",
-        "localhost,127.0.0.1"
+        "localhost,127.0.0.1,testserver"
     ).split(",")
     if h.strip()
 ]
+
+if DEBUG:
+    # The sandboxed preview proxies requests through a *.e2b.app host. Only
+    # development builds accept these; production must list real hosts via
+    # DJANGO_ALLOWED_HOSTS.
+    ALLOWED_HOSTS += [".e2b.app", ".arena.dev", ".localhost"]
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -39,6 +45,8 @@ INSTALLED_APPS = [
     "chats",
     "payments",
     "reviews",
+    "notifications.apps.NotificationsConfig",
+    "media_app.apps.MediaAppConfig",
     "platformcore",
 ]
 
@@ -143,6 +151,29 @@ CORS_ALLOWED_ORIGINS = [
 
 CORS_ALLOW_CREDENTIALS = True
 
+# In development the frontend is often opened from a phone (or a proxied
+# preview URL), so any private-network origin is accepted. Production must
+# list its origins explicitly in CORS_ALLOWED_ORIGINS.
+CORS_ALLOWED_ORIGIN_REGEXES = [] if not DEBUG else [
+    r"^http://localhost:\d+$",
+    r"^http://127\.0\.0\.1:\d+$",
+    r"^http://10\.\d+\.\d+\.\d+:\d+$",
+    r"^http://192\.168\.\d+\.\d+:\d+$",
+    r"^http://172\.(1[6-9]|2\d|3[01])\.\d+\.\d+:\d+$",
+    r"^https://[a-z0-9-]+\.(e2b\.app|arena\.dev)$",
+]
+CORS_URLS_REGEX = r"^/(api|media)/.*$"
+
+
+# ============================================================
+# Throttling (brute-force protection)
+# ============================================================
+
+THROTTLE_ANON = os.getenv("THROTTLE_ANON", "60/min")
+THROTTLE_USER = os.getenv("THROTTLE_USER", "1000/day")
+THROTTLE_LOGIN = os.getenv("THROTTLE_LOGIN", "10/min")
+THROTTLE_OTP = os.getenv("THROTTLE_OTP", "5/min")
+
 
 # ============================================================
 # Django REST Framework
@@ -168,6 +199,21 @@ REST_FRAMEWORK = {
     ),
 
     "PAGE_SIZE": 20,
+
+    "DEFAULT_THROTTLE_CLASSES": (
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+    ),
+
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": THROTTLE_ANON,
+        "user": THROTTLE_USER,
+        "login": THROTTLE_LOGIN,
+        "otp": THROTTLE_OTP,
+    },
+
+    # Never leak a Django traceback to an API client.
+    "EXCEPTION_HANDLER": "platformcore.exceptions.api_exception_handler",
 }
 
 
@@ -268,3 +314,73 @@ ESEWA_TRUST_SANDBOX_SUCCESS = os.getenv(
     "ESEWA_TRUST_SANDBOX_SUCCESS",
     "true"
 ).lower() == "true"
+
+
+# ============================================================
+# LOGGING
+# ============================================================
+
+LOG_DIR = BASE_DIR / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {
+            "format": "[{asctime}] {levelname} {name} {message}",
+            "style": "{",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "verbose",
+        },
+        "file": {
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": str(LOG_DIR / "marketplace.log"),
+            "maxBytes": 5 * 1024 * 1024,
+            "backupCount": 3,
+            "formatter": "verbose",
+        },
+    },
+    "root": {
+        "handlers": ["console", "file"],
+        "level": os.getenv("DJANGO_LOG_LEVEL", "INFO"),
+    },
+    "loggers": {
+        # Log important business events under the "marketplace" namespace.
+        "marketplace": {
+            "handlers": ["console", "file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "django.request": {
+            "handlers": ["console", "file"],
+            "level": "WARNING",
+            "propagate": False,
+        },
+    },
+}
+
+
+# ============================================================
+# UPLOADS
+# ============================================================
+
+MAX_UPLOAD_SIZE_MB = int(os.getenv("MAX_UPLOAD_SIZE_MB", "10"))
+ALLOWED_IMAGE_EXTENSIONS = [
+    ".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif",
+]
+ALLOWED_IMAGE_MIME_TYPES = [
+    "image/jpeg", "image/png", "image/webp", "image/gif", "image/heic", "image/heif",
+]
+
+# Upload requests larger than this are rejected by Django before hitting a view.
+DATA_UPLOAD_MAX_MEMORY_SIZE = MAX_UPLOAD_SIZE_MB * 1024 * 1024 * 2
+FILE_UPLOAD_MAX_MEMORY_SIZE = MAX_UPLOAD_SIZE_MB * 1024 * 1024
+
+# Booking rules
+BOOKING_CANCEL_CUTOFF_HOURS = int(os.getenv("BOOKING_CANCEL_CUTOFF_HOURS", "24"))
+DEFAULT_SERVICE_RADIUS_KM = int(os.getenv("DEFAULT_SERVICE_RADIUS_KM", "25"))

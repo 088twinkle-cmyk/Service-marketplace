@@ -1,50 +1,60 @@
-from django.db import transaction
-from rest_framework.exceptions import ValidationError
+"""Status helpers for the booking state machine.
 
-from .models import Booking, CounterOffer
+This module previously referenced models that no longer exist
+(``Booking``, ``CounterOffer.PENDING``), which made it dead, un-importable
+code. It now delegates to the real implementation in ``state_machine`` and
+``services`` so there is a single source of truth for the workflow.
+"""
+from .models import CounterOffer, ProjectBooking
+from .state_machine import ALLOWED_TRANSITIONS, LOCKED_AFTER_PAYMENT, transition
 
-
-PENDING_SET = {
-    Booking.PENDING_PROVIDER_RESPONSE,
-    "pending",
-}
-
-PAYABLE_SET = {
-    Booking.AGREEMENT_REACHED,
-    Booking.PAYMENT_PENDING,
-    Booking.PAYMENT_FAILED,
-}
-
-CONFIRMED_SET = {
-    Booking.CONFIRMED,
-    "confirmed",
-    Booking.IN_PROGRESS,
-    Booking.DELIVERABLE_SUBMITTED,
-    Booking.CLIENT_REVIEWING,
-    Booking.REVISION_REQUESTED,
+# Statuses in which a booking is still open for changes.
+OPEN_STATUSES = {
+    ProjectBooking.Status.DRAFT,
+    ProjectBooking.Status.PENDING_PROVIDER_RESPONSE,
+    ProjectBooking.Status.COUNTER_OFFERED,
+    ProjectBooking.Status.AGREEMENT_REACHED,
+    ProjectBooking.Status.PAYMENT_PENDING,
+    ProjectBooking.Status.PAYMENT_FAILED,
 }
 
 
-def normalize_status(status: str) -> str:
-    return Booking.LEGACY_STATUS_MAP.get(status, status)
+def normalize_status(value: str) -> str:
+    """Map a legacy/lowercase status onto the canonical enum value."""
+    if not value:
+        return ""
+    upper = value.strip().upper()
+    if upper in ProjectBooking.Status.values:
+        return upper
+    # A few historical aliases that may still be present in stored data.
+    aliases = {
+        "PENDING": ProjectBooking.Status.PENDING_PROVIDER_RESPONSE,
+        "ACCEPTED": ProjectBooking.Status.AGREEMENT_REACHED,
+        "COMPLETE": ProjectBooking.Status.COMPLETED,
+        "CANCELED": ProjectBooking.Status.CANCELLED,
+    }
+    return aliases.get(upper, upper)
 
 
-def active_counter(booking: Booking):
-    return booking.counter_offers.filter(status=CounterOffer.PENDING).first()
+def active_counter_offer(booking: ProjectBooking):
+    return booking.counter_offers.filter(status=CounterOffer.Status.ACTIVE).first()
 
 
-def set_status(booking: Booking, new_status: str, extra_fields=None):
-    booking.status = new_status
-    fields = ["status", "updated_at"]
-    if extra_fields:
-        fields.extend(extra_fields)
-    booking.save(update_fields=fields)
-    return booking
+def can_transition(booking: ProjectBooking, new_status: str) -> bool:
+    return new_status in ALLOWED_TRANSITIONS.get(booking.status, set())
 
 
-@transaction.atomic
-def lock_booking(booking_id: int) -> Booking:
-    try:
-        return Booking.objects.select_for_update().get(pk=booking_id)
-    except Booking.DoesNotExist:
-        raise ValidationError("Project not found.")
+def is_locked_after_payment(booking: ProjectBooking) -> bool:
+    return booking.status in LOCKED_AFTER_PAYMENT
+
+
+__all__ = [
+    "ALLOWED_TRANSITIONS",
+    "LOCKED_AFTER_PAYMENT",
+    "OPEN_STATUSES",
+    "transition",
+    "normalize_status",
+    "active_counter_offer",
+    "can_transition",
+    "is_locked_after_payment",
+]

@@ -50,8 +50,7 @@ export default function ProviderAvailabilityScreen() {
     }
     setLoading(true);
     try {
-      const allServices = await servicesApi.list();
-      const mine = allServices.filter((s) => s.provider_name === auth.username);
+      const mine = await servicesApi.listMine();
       setMyServices(mine);
       if (mine.length && !selectedServiceId) {
         setSelectedServiceId(mine[0].id);

@@ -2,7 +2,11 @@
   "compilerOptions": {
     "target": "ES2020",
     "useDefineForClassFields": true,
-    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2020",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "allowJs": false,
     "skipLibCheck": true,
     "esModuleInterop": true,
@@ -15,13 +19,39 @@
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx",
-
     "baseUrl": ".",
     "ignoreDeprecations": "6.0",
-
     "paths": {
-      "@/*": ["./src/*"],
-      "@/assets/*": ["./assets/*"]
+      "@/*": [
+        "./src/*"
+      ],
+      "@/assets/*": [
+        "./assets/*"
+      ],
+      "expo-router": [
+        "./src/shims/expo-router.tsx"
+      ],
+      "expo-image": [
+        "./src/shims/expo-image.tsx"
+      ],
+      "expo-image-picker": [
+        "./src/shims/expo-image-picker.ts"
+      ],
+      "expo-location": [
+        "./src/shims/expo-location.ts"
+      ],
+      "expo-constants": [
+        "./src/shims/expo-constants.ts"
+      ],
+      "expo-file-system/legacy": [
+        "./src/shims/expo-file-system-legacy.ts"
+      ],
+      "react-native-safe-area-context": [
+        "./src/shims/react-native-safe-area-context.tsx"
+      ],
+      "react-native-reanimated": [
+        "./src/shims/react-native-reanimated.tsx"
+      ]
     }
   },
   "include": [
