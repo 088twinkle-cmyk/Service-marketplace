@@ -77,14 +77,14 @@ export default function ProfileSection({ profile, onUpdated }: Props) {
         quality: 0.75,
       });
 
-    if (result.canceled || !result.assets[0]) {
+    if (result.canceled || !result.assets?.[0]) {
       return;
     }
 
     setUploading(true);
 
     try {
-      const asset = result.assets[0];
+      const asset = result.assets?.[0];
 
       const formData = new FormData();
 

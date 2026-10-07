@@ -39,7 +39,7 @@ export default function SearchScreen() {
   const onOpen = (service: ServiceItem) => {
     (async () => {
       const auth = await getAuth();
-      if (auth.role?.toLowerCase() === "provider" && auth.username && service.provider_name === auth.username) {
+      if (auth.role?.toLowerCase() === "provider" && service.is_mine) {
         router.replace("/provider-services");
         return;
       }

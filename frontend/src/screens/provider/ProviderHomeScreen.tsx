@@ -45,7 +45,7 @@ export default function ProviderHomeScreen() {
             is_verified: false,
           })),
 
-        servicesApi.list().catch(() => []),
+        servicesApi.listMine().catch(() => []),
 
         bookingsApi.listBookings().catch(() => []),
       ]);
@@ -53,11 +53,7 @@ export default function ProviderHomeScreen() {
       setKycStatus(profile.kyc_status || "pending");
       setVerified(!!profile.is_verified);
 
-      const mine = services.filter(
-        (s) => s.provider_name === auth.username
-      );
-
-      setServiceCount(mine.length);
+      setServiceCount(services.length);
 
       const active = bookings.filter(
         (b) => b.status !== "cancelled"

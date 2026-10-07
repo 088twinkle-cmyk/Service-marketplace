@@ -270,5 +270,14 @@ const styles = StyleSheet.create({
   rejectText: { color: "#B91C1C", fontWeight: "700", fontSize: 13 },
   cancelBtn: { paddingHorizontal: 10, paddingVertical: 6 },
   cancelText: { color: PRIMARY, fontWeight: "700", fontSize: 13 },
+  chatBtn: {
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: PRIMARY,
+    borderRadius: 8,
+    paddingVertical: 10,
+    alignItems: "center",
+  },
+  chatBtnText: { color: PRIMARY, fontWeight: "700", fontSize: 14 },
   tooLate: { fontSize: 12, color: TEXT_MUTED, fontStyle: "italic" },
 });

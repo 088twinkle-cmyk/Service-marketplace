@@ -1,4 +1,4 @@
-import { api } from "./client";
+import { api, unwrapList } from "./client";
 
 export type ChatMessage = {
   id: number;
@@ -26,12 +26,12 @@ export type ChatRoom = {
 
 export const chatsApi = {
   listRooms: () =>
-    api.get<ChatRoom[]>("api/chat/conversations/").then((r) => (Array.isArray(r.data) ? r.data : [])),
+    api.get("api/chat/conversations/").then((r) => unwrapList<ChatRoom>(r.data)),
 
   getMessages: (roomId: number) =>
     api
-      .get<ChatMessage[]>(`api/chat/conversations/${roomId}/messages/`)
-      .then((r) => (Array.isArray(r.data) ? r.data : [])),
+      .get(`api/chat/conversations/${roomId}/messages/`)
+      .then((r) => unwrapList<ChatMessage>(r.data)),
 
   sendMessage: (roomId: number, data: { text?: string; image_url?: string }) =>
     api.post<ChatMessage>(`api/chat/conversations/${roomId}/send/`, data).then((r) => r.data),
@@ -40,5 +40,5 @@ export const chatsApi = {
     api.post(`api/chat/conversations/${roomId}/mark-read/`),
 
   roomForBooking: (bookingId: number) =>
-    api.get<ChatRoom>(`api/chat/booking/${bookingId}/`).then((r) => r.data),
+    api.get<ChatRoom>(`api/chat/conversations/booking/${bookingId}/`).then((r) => r.data),
 };

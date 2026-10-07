@@ -8,6 +8,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from platformcore.uploads import validate_base64_upload, validate_upload
+
 from .models import MediaFile
 
 
@@ -15,7 +17,7 @@ def _save_media(request, file_content: bytes, file_name: str, purpose: str):
     safe_name = file_name or f"upload-{uuid.uuid4().hex[:8]}.jpg"
     media = MediaFile.objects.create(
         uploaded_by=request.user,
-        purpose=purpose,
+        purpose=purpose[:50],
     )
     media.file.save(safe_name, ContentFile(file_content), save=True)
     url = request.build_absolute_uri(media.file.url)
@@ -24,6 +26,7 @@ def _save_media(request, file_content: bytes, file_name: str, purpose: str):
 
 class MediaUploadView(APIView):
     """Multipart upload (web / some native clients)."""
+
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
 
@@ -35,15 +38,21 @@ class MediaUploadView(APIView):
                 break
         if not upload:
             return Response(
-                {"error": "No file uploaded. Use /media/upload-base64/ from the mobile app."},
+                {"error": "No file uploaded. Send it as multipart field 'file'."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        try:
+            validate_upload(upload)
+        except Exception as exc:  # ValidationError
+            message = exc.messages[0] if hasattr(exc, "messages") else str(exc)
+            return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
 
         purpose = (request.data.get("purpose") or "service").strip()
         media = MediaFile.objects.create(
             uploaded_by=request.user,
             file=upload,
-            purpose=purpose,
+            purpose=purpose[:50],
         )
         url = request.build_absolute_uri(media.file.url)
         return Response({"id": media.id, "url": url}, status=status.HTTP_201_CREATED)
@@ -51,30 +60,42 @@ class MediaUploadView(APIView):
 
 class MediaUploadBase64View(APIView):
     """JSON base64 upload — reliable for Expo / React Native image picker."""
+
     permission_classes = [IsAuthenticated]
     parser_classes = [JSONParser]
 
     def post(self, request):
         raw_b64 = request.data.get("image_base64") or request.data.get("image")
         if not raw_b64:
-            return Response({"error": "image_base64 is required."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "image_base64 is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         if isinstance(raw_b64, str) and "," in raw_b64:
             raw_b64 = raw_b64.split(",", 1)[1]
 
         try:
-            file_bytes = base64.b64decode(raw_b64)
+            file_bytes = base64.b64decode(raw_b64, validate=True)
         except Exception:
-            return Response({"error": "Invalid base64 image data."}, status=status.HTTP_400_BAD_REQUEST)
-
-        if len(file_bytes) < 100:
-            return Response({"error": "Image data too small."}, status=status.HTTP_400_BAD_REQUEST)
-
-        if len(file_bytes) > 10 * 1024 * 1024:
-            return Response({"error": "Image must be under 10 MB."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "Invalid base64 image data."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         file_name = (request.data.get("file_name") or "upload.jpg").strip()
+        mime_type = (request.data.get("mime_type") or "image/jpeg").strip()
         purpose = (request.data.get("purpose") or "service").strip()
+
+        try:
+            validate_base64_upload(
+                file_name=file_name,
+                mime_type=mime_type,
+                byte_length=len(file_bytes),
+            )
+        except Exception as exc:
+            message = exc.messages[0] if hasattr(exc, "messages") else str(exc)
+            return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
 
         media, url = _save_media(request, file_bytes, file_name, purpose)
         return Response(

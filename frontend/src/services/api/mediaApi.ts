@@ -204,7 +204,7 @@ export async function uploadFile({
 
 
 
-  const res = await api.post<UploadResult>("media/upload-base64/", {
+  const res = await api.post<UploadResult>("api/media/upload-base64/", {
 
     image_base64: base64,
 

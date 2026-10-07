@@ -101,18 +101,16 @@ export const authApi = {
       }
     ),
 
-  // Forgot password.
-  // Keep these only if the backend later provides these endpoints.
+  // Forgot password — emails a user id + reset token.
   forgotPassword: (email: string) =>
     authClient
-      .post<{ message: string; email_sent?: boolean }>(
-        "api/auth/users/forgot-password/",
+      .post<{ message: string; uid?: string; debug_token?: string }>(
+        "api/auth/password/forgot/",
         { email }
       )
       .then((response) => response.data),
 
-  // Reset password.
-  // Keep these only if the backend later provides these endpoints.
+  // Reset password with the emailed uid + token.
   resetPassword: (data: {
     email: string;
     uid: string;
@@ -121,17 +119,16 @@ export const authApi = {
   }) =>
     authClient
       .post<{ message: string }>(
-        "api/auth/users/reset-password/",
+        "api/auth/password/reset/",
         data
       )
       .then((response) => response.data),
 
   // Check username availability.
-  // Keep this only if the backend later provides this endpoint.
   checkUsername: (username: string) =>
     authClient
-      .post<{ available: boolean }>(
-        "api/auth/users/check-username/",
+      .post<{ username: string; available: boolean }>(
+        "api/auth/username-available/",
         { username }
       )
       .then((response) => response.data),

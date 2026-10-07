@@ -82,12 +82,22 @@ api.interceptors.response.use(
 
       isRefreshing = true;
       try {
-        const refreshRes = await axios.post<{ access: string }>(
-          `${getApiBaseUrl()}api/token/refresh/`,
+        const refreshRes = await axios.post<{ access: string; refresh?: string }>(
+          `${getApiBaseUrl()}api/auth/token/refresh/`,
           { refresh: refreshToken }
         );
         const newAccessToken = refreshRes.data.access;
         await AsyncStorage.setItem(StorageKeys.TOKEN, newAccessToken);
+
+        // SimpleJWT is configured to rotate refresh tokens (and blacklist the
+        // used one), so the rotated refresh token must replace the old value —
+        // otherwise the next silent refresh would be rejected.
+        if (refreshRes.data.refresh) {
+          await AsyncStorage.setItem(
+            StorageKeys.REFRESH_TOKEN,
+            refreshRes.data.refresh
+          );
+        }
         processQueue(null, newAccessToken);
 
         if (originalConfig.headers) {
@@ -129,6 +139,22 @@ api.interceptors.response.use(
     return api.request(originalConfig);
   }
 );
+
+/**
+ * DRF list endpoints are paginated by default (`{count, next, previous,
+ * results}`). Screens expect a plain array, so every list helper runs its
+ * response through this function.
+ */
+export function unwrapList<T>(data: unknown): T[] {
+  if (Array.isArray(data)) return data as T[];
+  if (data && typeof data === "object") {
+    const results = (data as { results?: unknown }).results;
+    if (Array.isArray(results)) return results as T[];
+    const nested = (data as { data?: unknown }).data;
+    if (Array.isArray(nested)) return nested as T[];
+  }
+  return [];
+}
 
 export function getApiErrorMessage(err: unknown, fallback: string): string {
   if (!axios.isAxiosError(err)) {

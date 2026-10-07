@@ -63,9 +63,9 @@ export default function ProviderServicesScreen() {
   const loadMyServices = async () => {
     setServicesLoading(true);
     try {
-      const auth = await getAuth();
-      const all = await servicesApi.list();
-      const mine = all.filter((s) => s.provider_name === auth.username);
+      // The backend knows who owns which service — never filter by display
+      // name on the client.
+      const mine = await servicesApi.listMine();
       setMyServices(mine);
     } catch {
       setMyServices([]);
@@ -106,11 +106,11 @@ export default function ProviderServicesScreen() {
       quality: 0.75,
       base64: true,
     });
-    if (!result.canceled && result.assets.length) {
+    if (!result.canceled && result.assets?.length) {
       setPhotoUris((prev) =>
         [
           ...prev,
-          ...result.assets.map((a, idx) => ({
+          ...(result.assets ?? []).map((a, idx) => ({
             uri: a.uri,
             mimeType: a.mimeType ?? "image/jpeg",
             fileName: a.fileName ?? `service-${prev.length + idx}.jpg`,

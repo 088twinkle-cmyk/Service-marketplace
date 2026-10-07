@@ -5,16 +5,12 @@ from rest_framework.response import Response
 
 from accounts.models import User
 from accounts.permissions import IsOTPVerified
+from bookings.services import booking_can_chat
+from notifications.services import EVENT_MESSAGE, notify
+from platformcore.uploads import validate_upload
 
 from .models import Conversation, Message
 from .serializers import ConversationSerializer, MessageSerializer
-
-
-CLOSED_STATUSES = {
-    "REJECTED",
-    "CANCELLED",
-    "EXPIRED",
-}
 
 
 def _participant_qs(user):
@@ -85,7 +81,7 @@ class ConversationViewSet(viewsets.ReadOnlyModelViewSet):
         if not conversation:
             return Response(
                 {
-                    "detail": "Chat conversation not found."
+                    "error": "Chat conversation not found."
                 },
                 status=status.HTTP_404_NOT_FOUND,
             )
@@ -134,12 +130,16 @@ class ConversationViewSet(viewsets.ReadOnlyModelViewSet):
         conversation = self.get_object()
         booking = conversation.booking
 
-        if booking.status in CLOSED_STATUSES:
+        # Business rule: chat only exists between a customer and the provider
+        # they have reached an agreement with.
+        if not booking_can_chat(booking):
             return Response(
                 {
-                    "detail": "Chat is closed for this project."
+                    "error": (
+                        "Chat opens once an offer has been accepted for this booking."
+                    )
                 },
-                status=status.HTTP_400_BAD_REQUEST,
+                status=status.HTTP_403_FORBIDDEN,
             )
 
         text = request.data.get("text")
@@ -151,10 +151,17 @@ class ConversationViewSet(viewsets.ReadOnlyModelViewSet):
 
         attachment = request.FILES.get("attachment")
 
+        if attachment:
+            try:
+                validate_upload(attachment, allow_documents=True)
+            except Exception as exc:
+                message = exc.messages[0] if hasattr(exc, "messages") else str(exc)
+                return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
+
         if not text and not attachment:
             return Response(
                 {
-                    "detail": "Message cannot be empty."
+                    "error": "Message cannot be empty."
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
@@ -165,6 +172,15 @@ class ConversationViewSet(viewsets.ReadOnlyModelViewSet):
             body=text,
             attachment=attachment,
         )
+
+        recipient = _other_participant(request.user, conversation)
+        if recipient:
+            notify(
+                recipient,
+                "New message",
+                f"{request.user.get_full_name() or request.user.username}: {text[:120]}",
+                EVENT_MESSAGE,
+            )
 
         serializer = MessageSerializer(
             message,
@@ -204,3 +220,14 @@ class ConversationViewSet(viewsets.ReadOnlyModelViewSet):
                 "marked_read": updated,
             }
         )
+
+
+def _other_participant(user, conversation):
+    """The user on the other side of a conversation."""
+    booking = conversation.booking
+
+    if booking.client and booking.client.user_id != user.id:
+        return booking.client.user
+    if booking.freelancer and booking.freelancer.user_id != user.id:
+        return booking.freelancer.user
+    return None
