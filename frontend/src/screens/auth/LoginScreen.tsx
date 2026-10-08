@@ -1,8 +1,9 @@
 /**
  * LoginScreen — email + password sign in.
  *
- * Handles the OTP-required branch exactly as before: the JWT is stored, then
- * the user is routed to `/otp` when the account still needs email verification.
+ * Handles the OTP-required branch: the JWT is stored, then the user is
+ * routed to `/otp` when the account still needs WhatsApp verification. The
+ * verification screen requests the WhatsApp code itself.
  */
 import React, { useState } from "react";
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from "react-native";
@@ -64,7 +65,7 @@ export default function LoginScreen() {
         password,
       });
 
-      const { access, refresh, user, otp_required, debug_otp } = res.data;
+      const { access, refresh, user, otp_required } = res.data;
 
       if (!access || !user) {
         showPopup("error", "Login failed", "The server returned an unexpected response.");
@@ -84,15 +85,10 @@ export default function LoginScreen() {
       });
 
       if (otp_required || !user.is_otp_verified) {
-        const hint =
-          __DEV__ && debug_otp
-            ? `Development OTP: ${debug_otp}`
-            : "We emailed you a 6-digit code.";
-
-        showPopup("info", "Email verification required", hint, () =>
+        showPopup("info", "WhatsApp verification required", "We'll send a 6-digit code to your WhatsApp number.", () =>
           router.replace({
             pathname: "/otp",
-            params: { email: user.email ?? email.trim().toLowerCase() },
+            params: { email: user.email ?? email.trim().toLowerCase(), auto: "1" },
           } as never)
         );
         return;

@@ -14,7 +14,7 @@ This repo follows the end-to-end flow from the project specification.
 
 | Spec folder | Django app | Purpose |
 |-------------|------------|---------|
-| `accounts/` | `users/` | Register, OTP, login |
+| `accounts/` | `accounts/` | Register, WhatsApp OTP, login |
 | `kyc/` | `kyc/` | Provider profile, KYC submit |
 | `services/` | `marketplace/` | Service catalog |
 | `portfolio/` | `portfolio/` | Provider portfolio items |
@@ -28,7 +28,10 @@ This repo follows the end-to-end flow from the project specification.
 
 ### Main API paths
 
-- `POST /users/send-otp/` → `POST /users/verify-otp-register/` → `POST /users/login/`
+- `POST /api/auth/register/` → `POST /api/auth/whatsapp/verify-otp/` (shared customer + provider registration; see `WHATSAPP-OTP.md`)
+- `POST /api/auth/whatsapp/send-otp/` — request/resume a WhatsApp OTP by phone number
+- `POST /api/auth/otp/resend/` — resend a pending registration's OTP (cooldown applies)
+- `POST /api/auth/login/` → `POST /api/auth/otp/request/` + `POST /api/auth/otp/verify/` (re-verification for unverified accounts)
 - `POST /providers/profile/` — provider setup
 - `POST /kyc/submit/` — KYC submission
 - `GET/POST /services/` — services
@@ -51,15 +54,15 @@ app/                # expo-router thin re-exports → screens
 
 ## Customer flow
 
-1. **Register** + email OTP → **Login**
+1. **Register** → **WhatsApp OTP verification** (shared flow) → signed in
 2. **Choose services** (`/choose-services`)
 3. **Dashboard** (`/home`) → Search → Book → Chat → Review
 
 ## Provider flow
 
-1. **Register** + OTP → **Login**
+1. **Register** → **WhatsApp OTP verification** (shared flow) → signed in
 2. **Provider setup** (`/provider-onboarding`) → `POST /providers/profile/`
-3. **KYC** (`/provider-kyc`) → `POST /kyc/submit/`
+3. **KYC** (`/provider-kyc`) → `POST /kyc/submit/` (separate from phone verification)
 4. **Admin approval** (Django Admin → approve KYC)
 5. **Dashboard** (`/provider-home`) → Create service / portfolio / availability
 

@@ -46,6 +46,43 @@ export const logout = async () => {
     StorageKeys.PROFILE_COMPLETED,
     StorageKeys.KYC_STATUS,
     StorageKeys.SERVICES,
+    StorageKeys.PENDING_REGISTRATION_ID,
+    StorageKeys.PENDING_REGISTRATION_PHONE,
+  ]);
+};
+
+/**
+ * Pending WhatsApp OTP registration context.
+ *
+ * The OTP screen keeps this in storage so the verification survives a page
+ * refresh: the registration id and the phone number are enough to resume
+ * (or re-request) the code.
+ */
+export const setPendingRegistration = async (data: {
+  registrationId: string;
+  phoneNumber: string;
+}) => {
+  await AsyncStorage.multiSet([
+    [StorageKeys.PENDING_REGISTRATION_ID, data.registrationId],
+    [StorageKeys.PENDING_REGISTRATION_PHONE, data.phoneNumber],
+  ]);
+};
+
+export const getPendingRegistration = async () => {
+  const [[, registrationId], [, phoneNumber]] = await AsyncStorage.multiGet([
+    StorageKeys.PENDING_REGISTRATION_ID,
+    StorageKeys.PENDING_REGISTRATION_PHONE,
+  ]);
+  return {
+    registrationId: registrationId ?? undefined,
+    phoneNumber: phoneNumber ?? undefined,
+  };
+};
+
+export const clearPendingRegistration = async () => {
+  await removeItems([
+    StorageKeys.PENDING_REGISTRATION_ID,
+    StorageKeys.PENDING_REGISTRATION_PHONE,
   ]);
 };
 

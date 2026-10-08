@@ -14,11 +14,14 @@ from .views import (
     KYCViewSet,
     LoginView,
     OTPRequestView,
+    OTPResendView,
     OTPVerifyView,
     ProfilePhotoDeleteView,
     ProfilePhotoView,
     ProfileUpdateView,
     RegisterView,
+    WhatsAppSendOTPView,
+    WhatsAppVerifyOTPView,
     me,
 )
 
@@ -62,6 +65,25 @@ urlpatterns = [
         "otp/verify/",
         OTPVerifyView.as_view(),
         name="otp-verify",
+    ),
+
+    # Shared WhatsApp OTP registration flow (customer + provider).
+    path(
+        "otp/resend/",
+        OTPResendView.as_view(),
+        name="otp-resend",
+    ),
+
+    path(
+        "whatsapp/send-otp/",
+        WhatsAppSendOTPView.as_view(),
+        name="whatsapp-send-otp",
+    ),
+
+    path(
+        "whatsapp/verify-otp/",
+        WhatsAppVerifyOTPView.as_view(),
+        name="whatsapp-verify-otp",
     ),
 
     path(

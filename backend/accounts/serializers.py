@@ -120,9 +120,18 @@ class UserSerializer(serializers.ModelSerializer):
 
 
 class RegisterSerializer(serializers.ModelSerializer):
+    """Validates a shared customer/provider registration submission.
+
+    No user is created here — the data goes into a PendingRegistration and
+    the permanent account is only created after the WhatsApp OTP is verified
+    (see accounts.otp.complete_registration).
+    """
+
     password = serializers.CharField(write_only=True)
 
     role = serializers.CharField(default=User.Role.CLIENT)
+
+    phone = serializers.CharField(required=True, max_length=32)
 
     class Meta:
         model = User
@@ -157,18 +166,25 @@ class RegisterSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("This username is already taken.")
         return username
 
+    def validate_phone(self, value):
+        from whatsapp import InvalidPhoneNumberError, normalize_phone_number
+
+        from .otp import phone_number_taken
+
+        try:
+            normalized = normalize_phone_number(value)
+        except InvalidPhoneNumberError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+
+        if phone_number_taken(normalized):
+            raise serializers.ValidationError(
+                "An account with this WhatsApp number already exists."
+            )
+        return normalized
+
     def validate_password(self, value):
         validate_password(value)
         return value
-
-    def create(self, validated_data):
-        password = validated_data.pop("password")
-
-        user = User(**validated_data)
-        user.set_password(password)
-        user.save()
-
-        return user
 
 
 class LoginSerializer(serializers.Serializer):
@@ -181,8 +197,50 @@ class OTPRequestSerializer(serializers.Serializer):
 
 
 class OTPVerifySerializer(serializers.Serializer):
+    """Login-flow verification: the JWT identifies the user."""
+
     email = serializers.EmailField(required=False)
-    code = serializers.CharField(max_length=8)
+    code = serializers.CharField(max_length=8, required=False)
+    # Alias accepted for clients that send {"otp": "123456"}.
+    otp = serializers.CharField(max_length=8, required=False, write_only=True)
+
+    def validate(self, attrs):
+        code = attrs.get("code") or attrs.pop("otp", None)
+        if not code:
+            raise serializers.ValidationError(
+                {"code": "Enter the 6-digit code sent to your WhatsApp."}
+            )
+        attrs["code"] = code
+        return attrs
+
+
+# ============================================================
+# WHATSAPP OTP (shared registration verification)
+# ============================================================
+
+class WhatsAppSendOTPSerializer(serializers.Serializer):
+    """Request an OTP for a phone number with a pending registration."""
+
+    phone_number = serializers.CharField(required=True, max_length=32)
+
+
+class WhatsAppVerifyOTPSerializer(serializers.Serializer):
+    """Complete registration: verify the OTP tied to a pending registration."""
+
+    registration_id = serializers.CharField(required=True, max_length=64)
+    otp = serializers.CharField(required=True, max_length=8)
+
+    def validate_otp(self, value):
+        cleaned = str(value).strip()
+        if not cleaned.isdigit() or len(cleaned) != 6:
+            raise serializers.ValidationError("Enter the 6-digit code from WhatsApp.")
+        return cleaned
+
+
+class OTPResendSerializer(serializers.Serializer):
+    """Resend the OTP for a pending registration."""
+
+    registration_id = serializers.CharField(required=True, max_length=64)
 
 
 # ============================================================

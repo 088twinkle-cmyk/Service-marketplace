@@ -275,6 +275,61 @@ OTP_EXPIRY_MINUTES = int(
 
 OTP_DEBUG_RETURN = DEBUG
 
+# Resend cooldown / brute-force / abuse limits for the shared OTP service.
+OTP_RESEND_COOLDOWN_SECONDS = int(
+    os.getenv("OTP_RESEND_COOLDOWN_SECONDS", "45")
+)
+OTP_MAX_ATTEMPTS = int(os.getenv("OTP_MAX_ATTEMPTS", "5"))
+OTP_MAX_REQUESTS = int(os.getenv("OTP_MAX_REQUESTS", "5"))
+# How long a pending (unverified) registration stays alive.
+PENDING_REGISTRATION_TTL_MINUTES = int(
+    os.getenv("PENDING_REGISTRATION_TTL_MINUTES", "30")
+)
+# Default country code used to normalise locally-typed phone numbers.
+PHONE_DEFAULT_COUNTRY_CODE = os.getenv("PHONE_DEFAULT_COUNTRY_CODE", "+977")
+
+
+# ============================================================
+# WhatsApp OTP verification
+#
+# Delivery goes through the provider-agnostic `whatsapp` package
+# (whatsapp.WhatsAppOTPService → WhatsAppProvider → Cloud API).  No token,
+# phone-number-ID or template detail ever reaches a view, serializer or the
+# frontend.  Delivery is DISABLED by default until real credentials are set;
+# with DEBUG on, a clearly-labelled development provider simulates delivery
+# so local flows work without credentials.
+# ============================================================
+
+WHATSAPP_OTP_ENABLED = os.getenv("WHATSAPP_OTP_ENABLED", "false").lower() == "true"
+
+# auto | cloud | development
+WHATSAPP_PROVIDER = os.getenv("WHATSAPP_PROVIDER", "auto")
+
+WHATSAPP_API_BASE_URL = os.getenv(
+    "WHATSAPP_API_BASE_URL", "https://graph.facebook.com"
+)
+WHATSAPP_API_VERSION = os.getenv("WHATSAPP_API_VERSION", "v21.0")
+
+# Secret — read from the environment only, never committed.
+WHATSAPP_ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN", "")
+
+# Meta identifiers — server-side configuration only.
+WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
+WHATSAPP_BUSINESS_ACCOUNT_ID = os.getenv("WHATSAPP_BUSINESS_ACCOUNT_ID", "")
+
+# Approved OTP template (created in the WhatsApp Business Manager).
+WHATSAPP_OTP_TEMPLATE_NAME = os.getenv("WHATSAPP_OTP_TEMPLATE_NAME", "")
+WHATSAPP_OTP_TEMPLATE_LANGUAGE = os.getenv(
+    "WHATSAPP_OTP_TEMPLATE_LANGUAGE", "en_US"
+)
+
+# The public WhatsApp business/verification number users receive messages
+# from (display information, not a credential).  Local Nepali format is
+# normalised to +977… automatically.
+WHATSAPP_VERIFICATION_NUMBER = os.getenv(
+    "WHATSAPP_VERIFICATION_NUMBER", "9843677123"
+)
+
 
 # ============================================================
 # ESEWA
