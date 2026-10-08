@@ -1,15 +1,20 @@
 """Authentication, JWT and role-based access control."""
 from django.core.cache import cache
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
-from accounts.models import OTPCode, User
+from accounts.models import OTPCode, PendingRegistration, User
 
 from .factories import PASSWORD, api_client, auth_client, make_provider, make_user
+
+# All OTP delivery in tests goes through the clearly-separated development
+# provider — no test ever contacts the real WhatsApp API.
+DEV_WHATSAPP = override_settings(WHATSAPP_PROVIDER="development")
 
 
 class RegistrationTests(TestCase):
     def setUp(self):
+        cache.clear()
         self.client = api_client()
         self.payload = {
             "username": "newcustomer",
@@ -19,62 +24,127 @@ class RegistrationTests(TestCase):
             "phone": "9800000001",
         }
 
-    def test_register_creates_user_with_hashed_password(self):
-        response = self.client.post("/api/auth/register/", self.payload, format="json")
-        self.assertEqual(response.status_code, 201, response.content)
+    def register(self, **overrides):
+        payload = dict(self.payload, **overrides)
+        return self.client.post("/api/auth/register/", payload, format="json")
+
+    @DEV_WHATSAPP
+    def test_register_starts_pending_whatsapp_verification(self):
+        response = self.register()
+        self.assertEqual(response.status_code, 202, response.content)
+        body = response.json()
+
+        # No permanent account yet — only a pending registration.
+        self.assertFalse(User.objects.filter(username="newcustomer").exists())
+        pending = PendingRegistration.objects.get(email="newcustomer@example.com")
+        self.assertEqual(body["registration_id"], pending.registration_token)
+        self.assertEqual(body["phone_number"], "+9779800000001")
+        self.assertEqual(body["role_key"], "customer")
+        self.assertIn("resend_cooldown", body)
+        # No tokens are issued before verification.
+        self.assertNotIn("access", body)
+        self.assertNotIn("refresh", body)
+        # The password is stored hashed, never in plaintext.
+        self.assertNotEqual(pending.password_hash, PASSWORD)
+        self.assertTrue(pending.password_hash.startswith(("pbkdf2_", "argon2", "bcrypt")))
+
+    @DEV_WHATSAPP
+    def test_register_and_verify_creates_customer_account(self):
+        response = self.register()
+        body = response.json()
+
+        verified = self.client.post(
+            "/api/auth/whatsapp/verify-otp/",
+            {
+                "registration_id": body["registration_id"],
+                "otp": body["debug_otp"],
+            },
+            format="json",
+        )
+        self.assertEqual(verified.status_code, 200, verified.content)
+        tokens = verified.json()
+        self.assertIn("access", tokens)
+        self.assertIn("refresh", tokens)
+        self.assertTrue(tokens["phone_verified"])
 
         user = User.objects.get(username="newcustomer")
         self.assertNotEqual(user.password, PASSWORD)
         self.assertTrue(user.check_password(PASSWORD))
-        self.assertFalse(user.is_otp_verified)
-        self.assertIn("access", response.json())
-        self.assertIn("refresh", response.json())
-        self.assertEqual(response.json()["user"]["role_key"], "customer")
+        # Phone verified server-side → account active without a second gate.
+        self.assertTrue(user.is_otp_verified)
+        self.assertEqual(user.phone, "+9779800000001")
+        self.assertEqual(tokens["user"]["role_key"], "customer")
+
+        # The pending registration is closed and cannot be reused.
+        pending = PendingRegistration.objects.get(email="newcustomer@example.com")
+        self.assertEqual(pending.status, PendingRegistration.Status.CONSUMED)
+
+    @DEV_WHATSAPP
+    def test_register_and_verify_creates_provider_account(self):
+        response = self.register(username="newprovider", email="np@example.com", role="PROVIDER")
+        self.assertEqual(response.status_code, 202, response.content)
+        body = response.json()
+        self.assertEqual(body["role_key"], "provider")
+
+        verified = self.client.post(
+            "/api/auth/whatsapp/verify-otp/",
+            {"registration_id": body["registration_id"], "otp": body["debug_otp"]},
+            format="json",
+        )
+        self.assertEqual(verified.status_code, 200, verified.content)
+
+        user = User.objects.get(username="newprovider")
+        self.assertEqual(user.role, User.Role.FREELANCER)
+        self.assertTrue(user.is_otp_verified)
+        # The role profile signal still runs for providers.
+        self.assertTrue(hasattr(user, "freelancer_profile"))
+        # Phone verification never replaces provider KYC.
+        self.assertFalse(hasattr(user.freelancer_profile, "kyc"))
 
     def test_cannot_register_as_admin(self):
-        payload = dict(self.payload, username="hacker", email="h@example.com", role="ADMIN")
-        response = self.client.post("/api/auth/register/", payload, format="json")
+        response = self.register(username="hacker", email="h@example.com", role="ADMIN")
         self.assertEqual(response.status_code, 400)
         self.assertFalse(User.objects.filter(username="hacker").exists())
+        self.assertFalse(
+            PendingRegistration.objects.filter(email="h@example.com").exists()
+        )
 
     def test_duplicate_email_and_username_rejected(self):
         make_user("taken", email="taken@example.com")
 
-        response = self.client.post(
-            "/api/auth/register/",
-            dict(self.payload, username="taken", email="other@example.com"),
-            format="json",
-        )
+        response = self.register(username="taken", email="other@example.com")
         self.assertEqual(response.status_code, 400)
 
-        response = self.client.post(
-            "/api/auth/register/",
-            dict(self.payload, email="taken@example.com"),
-            format="json",
+        response = self.register(email="taken@example.com")
+        self.assertEqual(response.status_code, 400)
+
+    def test_duplicate_phone_number_rejected(self):
+        make_user("phonetaken", email="pt@example.com", phone="9800000009")
+
+        response = self.register(
+            username="otherphone", email="otherphone@example.com", phone="98-0000-0009"
         )
         self.assertEqual(response.status_code, 400)
+        self.assertIn("WhatsApp number", str(response.json()))
 
     def test_weak_password_rejected(self):
-        response = self.client.post(
-            "/api/auth/register/", dict(self.payload, password="12345678"), format="json"
-        )
+        response = self.register(password="12345678")
         self.assertEqual(response.status_code, 400)
-
-    def test_provider_registration_creates_provider_profile(self):
-        response = self.client.post(
-            "/api/auth/register/",
-            dict(self.payload, username="newprovider", email="np@example.com", role="PROVIDER"),
-            format="json",
+        self.assertFalse(
+            PendingRegistration.objects.filter(email="newcustomer@example.com").exists()
         )
-        self.assertEqual(response.status_code, 201)
-        user = User.objects.get(username="newprovider")
-        self.assertEqual(user.role, User.Role.FREELANCER)
-        self.assertEqual(response.json()["user"]["role_key"], "provider")
-        self.assertTrue(hasattr(user, "freelancer_profile"))
+
+    def test_invalid_phone_number_rejected(self):
+        response = self.register(phone="not-a-phone")
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(
+            PendingRegistration.objects.filter(email="newcustomer@example.com").exists()
+        )
 
 
 class LoginTests(TestCase):
     def setUp(self):
+        cache.clear()
         self.client = api_client()
         self.user = make_user("loginuser", email="login@example.com")
 
@@ -104,15 +174,35 @@ class LoginTests(TestCase):
         )
         self.assertEqual(response.status_code, 400)
 
+    @DEV_WHATSAPP
     def test_unverified_user_is_told_otp_is_required(self):
         self.user.is_otp_verified = False
         self.user.save(update_fields=["is_otp_verified"])
+
         response = self.client.post(
             "/api/auth/login/", {"email": "login@example.com", "password": PASSWORD}, format="json"
         )
         self.assertEqual(response.status_code, 200)
-        self.assertTrue(response.json()["otp_required"])
+        body = response.json()
+        self.assertTrue(body["otp_required"])
+        self.assertEqual(body["otp_channel"], "whatsapp")
+        # Logging in alone never spams WhatsApp — the code is requested from
+        # the verification screen.
+        self.assertEqual(OTPCode.objects.filter(user=self.user).count(), 0)
+
+        client = auth_client(self.user)
+        request = client.post("/api/auth/otp/request/", {}, format="json")
+        self.assertEqual(request.status_code, 200, request.content)
         self.assertEqual(OTPCode.objects.filter(user=self.user).count(), 1)
+        self.assertEqual(
+            OTPCode.objects.get(user=self.user).phone_number, "+9779800000000"
+        )
+
+        code = request.json()["debug_otp"]
+        verified = client.post("/api/auth/otp/verify/", {"code": code}, format="json")
+        self.assertEqual(verified.status_code, 200, verified.content)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.is_otp_verified)
 
 
 class TokenTests(TestCase):
@@ -148,14 +238,22 @@ class TokenTests(TestCase):
 
 
 class OTPTests(TestCase):
+    """Login-flow verification for existing unverified users (WhatsApp OTP)."""
+
+    def setUp(self):
+        cache.clear()
+
+    @DEV_WHATSAPP
     def test_otp_verify_activates_account(self):
         user = make_user("otpuser", verified_otp=False)
         client = auth_client(user)
 
         request_otp = client.post("/api/auth/otp/request/", {}, format="json")
         self.assertEqual(request_otp.status_code, 200, request_otp.content)
-        code = request_otp.json().get("debug_otp")
+        body = request_otp.json()
+        code = body.get("debug_otp")
         self.assertIsNotNone(code, "DEBUG builds must return the OTP for development")
+        self.assertEqual(body["delivery"], "simulated")
 
         verified = client.post("/api/auth/otp/verify/", {"code": code}, format="json")
         self.assertEqual(verified.status_code, 200, verified.content)
@@ -163,6 +261,7 @@ class OTPTests(TestCase):
         self.assertTrue(user.is_otp_verified)
         self.assertIn("access", verified.json())
 
+    @DEV_WHATSAPP
     def test_wrong_otp_is_rejected(self):
         user = make_user("otpuser2", verified_otp=False)
         client = auth_client(user)
@@ -172,6 +271,38 @@ class OTPTests(TestCase):
         self.assertEqual(response.status_code, 400)
         user.refresh_from_db()
         self.assertFalse(user.is_otp_verified)
+
+    @DEV_WHATSAPP
+    def test_otp_request_cooldown(self):
+        user = make_user("otpuser3", verified_otp=False)
+        client = auth_client(user)
+
+        first = client.post("/api/auth/otp/request/", {}, format="json")
+        self.assertEqual(first.status_code, 200)
+
+        second = client.post("/api/auth/otp/request/", {}, format="json")
+        self.assertEqual(second.status_code, 429, second.content)
+        self.assertEqual(second.json()["code"], "otp_cooldown")
+
+    @DEV_WHATSAPP
+    def test_otp_request_without_phone_is_rejected(self):
+        user = make_user("otpuser4", verified_otp=False, phone="")
+        client = auth_client(user)
+
+        response = client.post("/api/auth/otp/request/", {}, format="json")
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["code"], "phone_missing")
+
+    @DEV_WHATSAPP
+    def test_otp_not_exposed_when_debug_return_disabled(self):
+        user = make_user("otpuser5", verified_otp=False)
+        client = auth_client(user)
+
+        with override_settings(OTP_DEBUG_RETURN=False):
+            response = client.post("/api/auth/otp/request/", {}, format="json")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("debug_otp", response.json())
 
 
 class RoleAccessControlTests(TestCase):

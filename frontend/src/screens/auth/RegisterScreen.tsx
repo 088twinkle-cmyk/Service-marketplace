@@ -1,14 +1,14 @@
 /**
- * RegisterScreen — create a customer or provider account.
+ * RegisterScreen — step 1 of the shared customer/provider registration.
  *
- * Two steps, exactly like before:
- *   1. details → `authApi.register` (the backend emails the OTP and returns an
- *      access token used to verify it)
- *   2. OTP → `authApi.verifyOtp`, then JWT storage + post-login routing
+ * The form submits to `authApi.register`; the backend stores a PENDING
+ * registration (no account yet) and sends a WhatsApp OTP to the phone
+ * number.  The screen then hands over to the shared OtpScreen
+ * (`/otp`) with the registration id — verification completes the account
+ * and routes by role (customer → home, provider → provider flow).
  */
-import React, { useEffect, useRef, useState } from "react";
+import React, { useState } from "react";
 import {
-  Animated,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -25,12 +25,10 @@ import FeedbackModal, { type FeedbackType } from "../../components/FeedbackModal
 import Button from "../../components/ui/Button";
 import Input, { PasswordInput } from "../../components/ui/Input";
 import { Chip, StepTrail } from "../../components/ui/Layout";
-import { authApi } from "../../services/api/authApi";
+import { authApi, getApiErrorCode } from "../../services/api/authApi";
 import { getApiErrorMessage } from "../../services/api/client";
-import { setAuth, getPostLoginRoute } from "../../auth/auth";
-import { colors, radius, spacing, typography, weight } from "../../theme/tokens";
-
-const RESEND_COOLDOWN = 30;
+import { setPendingRegistration } from "../../auth/auth";
+import { colors, radius, spacing, typography } from "../../theme/tokens";
 
 export default function RegisterScreen() {
   const router = useRouter();
@@ -44,23 +42,13 @@ export default function RegisterScreen() {
     email?: string;
     phone?: string;
     password?: string;
-    otp?: string;
   }>({});
 
   // Backend uses CLIENT / FREELANCER.
   const [role, setRole] = useState<"CLIENT" | "FREELANCER">("CLIENT");
 
-  const [otp, setOtp] = useState("");
-  const [otpSent, setOtpSent] = useState(false);
-  const [sendingOtp, setSendingOtp] = useState(false);
-  const [verifying, setVerifying] = useState(false);
-  const [cooldown, setCooldown] = useState(0);
+  const [submitting, setSubmitting] = useState(false);
   const [usernameTaken, setUsernameTaken] = useState(false);
-
-  // Access token returned by /api/auth/register/
-  const [accessToken, setAccessToken] = useState<string | null>(null);
-
-  const fadeAnim = useRef(new Animated.Value(0)).current;
 
   const [popup, setPopup] = useState<{
     visible: boolean;
@@ -83,29 +71,15 @@ export default function RegisterScreen() {
     cb?.();
   };
 
-  useEffect(() => {
-    if (cooldown <= 0) return;
-    const timer = setInterval(() => setCooldown((c) => (c <= 1 ? 0 : c - 1)), 1000);
-    return () => clearInterval(timer);
-  }, [cooldown]);
-
-  useEffect(() => {
-    Animated.timing(fadeAnim, {
-      toValue: otpSent ? 1 : 0,
-      duration: 320,
-      useNativeDriver: true,
-    }).start();
-  }, [otpSent, fadeAnim]);
-
   const normalizeEmail = (value: string) => value.trim().toLowerCase();
 
-  const sendOtp = async () => {
+  const submitRegistration = async () => {
     const nextErrors: typeof errors = {};
     if (!username.trim()) nextErrors.username = "Choose a username.";
     else if (username.trim().length < 3) nextErrors.username = "Use at least 3 characters.";
-    if (!email.trim()) nextErrors.email = "Enter your email to receive the verification code.";
+    if (!email.trim()) nextErrors.email = "Enter your email for account recovery.";
     else if (!/^\S+@\S+\.\S+$/.test(email.trim())) nextErrors.email = "That email looks incomplete.";
-    if (!phone.trim()) nextErrors.phone = "Enter a phone number customers can reach you on.";
+    if (!phone.trim()) nextErrors.phone = "Enter the WhatsApp number that should receive your verification code.";
     if (password.length < 6) nextErrors.password = "Use at least 6 characters.";
 
     setErrors(nextErrors);
@@ -114,9 +88,8 @@ export default function RegisterScreen() {
       setErrors({ username: "That username is already taken." });
       return;
     }
-    if (cooldown > 0) return;
 
-    setSendingOtp(true);
+    setSubmitting(true);
 
     try {
       const res = await authApi.register({
@@ -127,102 +100,51 @@ export default function RegisterScreen() {
         role,
       });
 
-      // OTP verification requires this access token.
-      setAccessToken(res.data.access);
-      setOtpSent(true);
-      setCooldown(RESEND_COOLDOWN);
+      const data = res.data;
 
-      const devOtp = res.data.debug_otp;
-      if (__DEV__ && devOtp) setOtp(devOtp);
+      // Keep the registration context for refresh-safety on the OTP screen.
+      await setPendingRegistration({
+        registrationId: data.registration_id,
+        phoneNumber: data.phone_number,
+      });
 
       showPopup(
         "success",
-        "Account created",
-        __DEV__ && devOtp
-          ? "Your account was created. Enter the verification code to activate it."
-          : "Your account was created. Check your email for the 6-digit code."
+        "WhatsApp code sent",
+        data.delivery === "simulated"
+          ? "Development mode: WhatsApp delivery is simulated — no real message was sent. Continue with the code below."
+          : `We've sent a 6-digit code to your WhatsApp number ${data.phone_number}.`,
+        () =>
+          router.replace({
+            pathname: "/otp",
+            params: {
+              registration_id: data.registration_id,
+              phone: data.phone_number,
+              role: data.role_key,
+              whatsapp_number: data.whatsapp_number ?? "",
+            },
+          } as never)
       );
     } catch (err) {
-      showPopup("error", "Registration failed", getApiErrorMessage(err, "Could not create account."));
-    } finally {
-      setSendingOtp(false);
-    }
-  };
+      const code = getApiErrorCode(err);
 
-  const verifyOtpRegister = async () => {
-    if (!accessToken) {
-      showPopup(
-        "error",
-        "Session missing",
-        "Please register again to start a new verification session."
-      );
-      return;
-    }
-
-    const code = otp.trim();
-    if (!code) {
-      setErrors({ otp: "Enter the 6-digit code from your email." });
-      return;
-    }
-    if (code.length !== 6) {
-      setErrors({ otp: "The code has 6 digits." });
-      return;
-    }
-
-    setVerifying(true);
-
-    try {
-      const res = await authApi.verifyOtp(accessToken, code);
-
-      if (!res.data.access) {
-        showPopup("error", "Verification failed", "No access token returned from the server.");
+      if (code === "whatsapp_not_configured" || code === "whatsapp_unavailable") {
+        showPopup(
+          "error",
+          "WhatsApp not available",
+          getApiErrorMessage(
+            err,
+            "WhatsApp verification is not configured on the server yet. Please try again later."
+          )
+        );
         return;
       }
 
-      const user = res.data.user;
-
-      await setAuth({
-        access: res.data.access,
-        refresh: res.data.refresh,
-        role: user.role,
-        username: user.username,
-        email: user.email,
-      });
-
-      const route = await getPostLoginRoute(user.role);
-
-      showPopup("success", "Account verified", "Welcome to Service Marketplace.", () =>
-        router.replace(route)
-      );
-    } catch (err) {
-      showPopup("error", "Verification failed", getApiErrorMessage(err, "Invalid or expired code."));
+      showPopup("error", "Registration failed", getApiErrorMessage(err, "Could not start registration."));
     } finally {
-      setVerifying(false);
+      setSubmitting(false);
     }
   };
-
-  const resendOtp = async () => {
-    if (!accessToken) {
-      showPopup("error", "Session missing", "Please register again to request another code.");
-      return;
-    }
-    if (cooldown > 0) return;
-
-    setSendingOtp(true);
-    try {
-      const res = await authApi.requestOtp(accessToken);
-      setCooldown(RESEND_COOLDOWN);
-      const devOtp = res.data.debug_otp;
-      if (__DEV__ && devOtp) setOtp(devOtp);
-      showPopup("success", "Code resent", __DEV__ && devOtp ? "A new code was generated." : "A new code is on its way.");
-    } catch (err) {
-      showPopup("error", "Could not resend", getApiErrorMessage(err, "Try again in a moment."));
-    } finally {
-      setSendingOtp(false);
-    }
-  };
-
-  const step = otpSent ? 2 : 1;
 
   return (
     <KeyboardAvoidingView
@@ -231,13 +153,13 @@ export default function RegisterScreen() {
     >
       <AuthLayout
         title="Create your account"
-        subtitle="Choose how you want to use the marketplace, then verify your email."
+        subtitle="Choose how you want to use the marketplace, then verify your WhatsApp number."
         showBack
         onBack={() => router.back()}
       >
         <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
           <View style={styles.trail}>
-            <StepTrail steps={["Your details", "Verify email"]} current={step - 1} />
+            <StepTrail steps={["Your details", "Verify WhatsApp"]} current={0} />
           </View>
 
           <View style={styles.roleRow}>
@@ -301,8 +223,8 @@ export default function RegisterScreen() {
           />
 
           <Input
-            label="Phone"
-            placeholder="98XXXXXXXX"
+            label="WhatsApp number"
+            placeholder="+977 98XXXXXXXX"
             value={phone}
             onChangeText={(text) => {
               setPhone(text);
@@ -310,6 +232,7 @@ export default function RegisterScreen() {
             }}
             keyboardType="phone-pad"
             error={errors.phone}
+            hint="We'll send your 6-digit verification code to this WhatsApp number."
             required
           />
 
@@ -325,53 +248,13 @@ export default function RegisterScreen() {
             required
           />
 
-          {otpSent ? (
-            <Animated.View style={{ opacity: fadeAnim }}>
-              <Input
-                label="Verification code"
-                placeholder="123456"
-                value={otp}
-                onChangeText={(value) => {
-                  setOtp(value.replace(/\D/g, "").slice(0, 6));
-                  setErrors((prev) => ({ ...prev, otp: undefined }));
-                }}
-                keyboardType="number-pad"
-                maxLength={6}
-                autoComplete="one-time-code"
-                error={errors.otp}
-                hint="The code expires shortly — request a new one if it stops working."
-              />
-            </Animated.View>
-          ) : null}
-
-          {!otpSent ? (
-            <Button
-              label="Create account & send code"
-              size="lg"
-              fullWidth
-              loading={sendingOtp}
-              onPress={sendOtp}
-            />
-          ) : (
-            <>
-              <Button
-                label="Verify & continue"
-                size="lg"
-                fullWidth
-                loading={verifying}
-                onPress={verifyOtpRegister}
-              />
-              <Button
-                label={cooldown > 0 ? `Resend code in ${cooldown}s` : "Resend code"}
-                variant="ghost"
-                size="sm"
-                fullWidth
-                disabled={sendingOtp || cooldown > 0}
-                style={{ marginTop: spacing.sm }}
-                onPress={resendOtp}
-              />
-            </>
-          )}
+          <Button
+            label="Create account & send code"
+            size="lg"
+            fullWidth
+            loading={submitting}
+            onPress={submitRegistration}
+          />
 
           <View style={styles.footerRow}>
             <Text style={styles.footerText}>Already have an account?</Text>
@@ -384,13 +267,13 @@ export default function RegisterScreen() {
           </View>
 
           <View style={styles.hintBox}>
-            <Text style={styles.hintTitle}>Why we verify your email</Text>
+            <Text style={styles.hintTitle}>Why we verify your WhatsApp</Text>
             <Text style={styles.hintText}>
-              Verification keeps fake accounts out of the marketplace. Providers additionally submit
-              an identity document before they can publish services.
+              A verified WhatsApp number keeps fake accounts out of the marketplace. Providers
+              additionally submit an identity document (KYC) before they can publish services.
             </Text>
             <View style={styles.chipRow}>
-              <Chip label="Email OTP" size="sm" active />
+              <Chip label="WhatsApp OTP" size="sm" active />
               <Chip label="KYC for providers" size="sm" />
             </View>
           </View>
@@ -447,5 +330,4 @@ const styles = StyleSheet.create({
   hintTitle: { ...typography.bodyStrong, color: colors.text },
   hintText: { ...typography.small, color: colors.textMuted, marginTop: spacing.xs },
   chipRow: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.md, flexWrap: "wrap" },
-  weightBold: { fontWeight: weight.bold },
 });

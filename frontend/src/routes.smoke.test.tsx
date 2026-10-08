@@ -287,7 +287,7 @@ describe("every browser route renders", () => {
     ["/provider/7", "Anita Sharma"],
     ["/login", "Welcome back"],
     ["/register", "Create your account"],
-    ["/otp", "Verify your email"],
+    ["/otp", "Verify your WhatsApp"],
     ["/forgot-password", "Forgot your password?"],
     ["/reset-password", "Set a new password"],
     ["/choose-services", "What services do you need?"],

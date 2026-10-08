@@ -1,9 +1,3 @@
-import hashlib
-import hmac
-import secrets
-
-from datetime import timedelta
-
 from django.conf import settings
 from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
@@ -37,6 +31,11 @@ from rest_framework_simplejwt.token_blacklist.models import (
     OutstandingToken,
 )
 
+from whatsapp import (
+    InvalidPhoneNumberError,
+    normalize_phone_number,
+)
+
 import logging
 
 logger = logging.getLogger("marketplace")
@@ -45,8 +44,21 @@ from .models import (
     ClientProfile,
     FreelancerProfile,
     KYCVerification,
-    OTPCode,
     User,
+)
+
+from .otp import (
+    OTPCooldownError,
+    OTPServiceError,
+    complete_registration,
+    create_pending_registration,
+    delivery_channel,
+    ensure_whatsapp_available,
+    find_pending_registration,
+    find_pending_registration_by_phone,
+    issue_registration_otp,
+    issue_user_otp,
+    verify_user_otp,
 )
 
 from .permissions import (
@@ -63,24 +75,19 @@ from .serializers import (
     KYCSummarySerializer,
     LoginSerializer,
     OTPRequestSerializer,
+    OTPResendSerializer,
     OTPVerifySerializer,
     ProfileUpdateSerializer,
     RegisterSerializer,
     UserSerializer,
+    WhatsAppSendOTPSerializer,
+    WhatsAppVerifyOTPSerializer,
 )
 
 
 # ============================================================
-# OTP
+# OTP / WHATSAPP VERIFICATION
 # ============================================================
-
-def _hash_otp(code: str) -> str:
-    return hmac.new(
-        settings.SECRET_KEY.encode(),
-        code.encode(),
-        hashlib.sha256,
-    ).hexdigest()
-
 
 def issue_tokens(user: User, request=None):
     refresh = RefreshToken.for_user(user)
@@ -93,48 +100,77 @@ def issue_tokens(user: User, request=None):
     }
 
 
-def send_otp(
-    user: User,
-    purpose: str = "login",
-):
-    code = f"{secrets.randbelow(1_000_000):06d}"
+def _otp_error_response(exc: OTPServiceError):
+    """Turn a service error into a safe API response (no provider details)."""
+    payload = {"error": exc.message, "code": exc.code}
+    payload.update(exc.extra or {})
+    return Response(payload, status=exc.status_code)
 
-    OTPCode.objects.create(
-        user=user,
-        code_hash=_hash_otp(code),
-        expires_at=(
-            timezone.now()
-            + timedelta(
-                minutes=settings.OTP_EXPIRY_MINUTES
-            )
+
+def _whatsapp_service_info() -> dict:
+    """Non-sensitive display info for verification screens."""
+    from whatsapp import get_whatsapp_otp_service
+
+    service = get_whatsapp_otp_service()
+    return {
+        "whatsapp_number": service.verification_number,
+        "provider_configured": service.is_configured,
+    }
+
+
+def _registration_payload(
+    pending,
+    *,
+    delivery: str,
+    delivered: bool,
+    cooldown_seconds: int,
+) -> dict:
+    from .roles import role_key
+
+    payload = {
+        "registration_id": pending.registration_token,
+        "phone_number": pending.phone_number,
+        "role": pending.role,
+        "role_key": role_key(pending.role),
+        "expires_in": max(
+            0, int((pending.expires_at - timezone.now()).total_seconds())
         ),
-        purpose=purpose,
-    )
-
-    send_mail(
-        subject="Your marketplace verification code",
-        message=(
-            f"Your OTP code is {code}. "
-            f"It expires in "
-            f"{settings.OTP_EXPIRY_MINUTES} minutes."
+        "otp_expires_in": max(
+            0,
+            int(
+                (
+                    (pending.otp_expires_at or timezone.now())
+                    - timezone.now()
+                ).total_seconds()
+            ),
         ),
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[user.email],
-        fail_silently=True,
-    )
-
-    return code
+        "resend_cooldown": cooldown_seconds,
+        "delivery": delivery,
+        "delivered": delivered,
+    }
+    payload.update(_whatsapp_service_info())
+    return payload
 
 
 # ============================================================
-# REGISTER
+# REGISTER (shared customer + provider flow, WhatsApp OTP)
 # ============================================================
 
 class RegisterView(generics.CreateAPIView):
+    """Step 1 of the shared registration flow.
+
+    Validates the submission (role-independent for customers AND providers),
+    stores it as a PendingRegistration and sends a WhatsApp OTP to the
+    submitted phone number.  The permanent account — with the exact role
+    chosen here — is only created after the OTP is verified.
+    """
+
     serializer_class = RegisterSerializer
     permission_classes = [
         permissions.AllowAny
     ]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "otp"
 
     def create(
         self,
@@ -150,21 +186,61 @@ class RegisterView(generics.CreateAPIView):
             raise_exception=True
         )
 
-        user = serializer.save()
+        data = serializer.validated_data
 
-        code = send_otp(
-            user,
-            purpose="register",
+        try:
+            # Fail fast (no state) when delivery cannot work at all.
+            ensure_whatsapp_available()
+        except OTPServiceError as exc:
+            return _otp_error_response(exc)
+
+        pending, created = create_pending_registration(
+            username=data["username"],
+            email=data["email"],
+            phone_number=data["phone"],
+            role=data["role"],
+            password=data["password"],
         )
 
-        payload = issue_tokens(user, request)
+        try:
+            issued = issue_registration_otp(pending)
+        except OTPCooldownError as exc:
+            # A code was recently sent for this identity and is still valid.
+            # The (possibly corrected) registration data is already saved —
+            # continue with the fresh registration_id instead of failing.
+            payload = _registration_payload(
+                pending,
+                delivery="recently_sent",
+                delivered=False,
+                cooldown_seconds=exc.retry_after_seconds,
+            )
+            payload["otp_already_sent"] = True
+            payload["message"] = (
+                f"A verification code was recently sent to your WhatsApp. "
+                f"You can request a new one in {exc.retry_after_seconds}s."
+            )
+            return Response(
+                payload,
+                status=status.HTTP_202_ACCEPTED,
+            )
+        except OTPServiceError as exc:
+            return _otp_error_response(exc)
+
+        payload = _registration_payload(
+            pending,
+            delivery=delivery_channel(issued.delivery),
+            delivered=issued.delivery.delivered,
+            cooldown_seconds=settings.OTP_RESEND_COOLDOWN_SECONDS,
+        )
 
         if settings.OTP_DEBUG_RETURN:
-            payload["debug_otp"] = code
+            # Development convenience only (never in production): lets the
+            # local flow complete without a real WhatsApp integration.
+            payload["debug_otp"] = issued.code
 
         return Response(
             payload,
-            status=status.HTTP_201_CREATED,
+            status=status.HTTP_202_ACCEPTED,
         )
 
 
@@ -224,41 +300,50 @@ class LoginView(generics.GenericAPIView):
         payload = issue_tokens(user, request)
 
         if not user.is_otp_verified:
-            code = send_otp(user)
-
-            if settings.OTP_DEBUG_RETURN:
-                payload["debug_otp"] = code
-
+            # The WhatsApp OTP is requested explicitly from the verification
+            # screen (`/api/auth/otp/request/`), so logging in alone never
+            # spams a user's WhatsApp.
             payload["otp_required"] = True
+            payload["otp_channel"] = "whatsapp"
 
         return Response(payload)
 
 
 # ============================================================
-# OTP REQUEST
+# OTP REQUEST (login / re-verification for an existing user)
 # ============================================================
 
 class OTPRequestView(generics.GenericAPIView):
+    """Sends a WhatsApp OTP to the authenticated user's phone number."""
+
     serializer_class = OTPRequestSerializer
     permission_classes = [
         permissions.IsAuthenticated
     ]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "otp"
 
     def post(self, request):
-        code = send_otp(request.user)
+        try:
+            issued = issue_user_otp(request.user)
+        except OTPServiceError as exc:
+            return _otp_error_response(exc)
 
         data = {
-            "error": "OTP sent.",
+            "message": "OTP sent to your WhatsApp number.",
+            "delivery": delivery_channel(issued.delivery),
+            "resend_cooldown": settings.OTP_RESEND_COOLDOWN_SECONDS,
         }
+        data.update(_whatsapp_service_info())
 
         if settings.OTP_DEBUG_RETURN:
-            data["debug_otp"] = code
+            data["debug_otp"] = issued.code
 
         return Response(data)
 
 
 # ============================================================
-# OTP VERIFY
+# OTP VERIFY (login / re-verification for an existing user)
 # ============================================================
 
 class OTPVerifyView(generics.GenericAPIView):
@@ -276,52 +361,216 @@ class OTPVerifyView(generics.GenericAPIView):
             raise_exception=True
         )
 
-        code = serializer.validated_data["code"]
+        try:
+            verify_user_otp(request.user, serializer.validated_data["code"])
+        except OTPServiceError as exc:
+            return _otp_error_response(exc)
 
-        otp = (
-            OTPCode.objects.filter(
-                user=request.user,
-                consumed_at__isnull=True,
-                expires_at__gt=timezone.now(),
-            )
-            .order_by("-created_at")
-            .first()
+        return Response(
+            issue_tokens(request.user)
         )
 
-        if (
-            not otp
-            or not hmac.compare_digest(
-                otp.code_hash,
-                _hash_otp(code),
+
+# ============================================================
+# WHATSAPP SEND OTP (pending registration, phone-first entry)
+# ============================================================
+
+class WhatsAppSendOTPView(generics.GenericAPIView):
+    """Request/resume a WhatsApp OTP for a phone number.
+
+    If an active pending registration exists for the number, a fresh OTP is
+    delivered and the registration_id is returned (this also lets a user
+    recover the flow after refreshing the OTP screen).  The response is
+    intentionally identical when no registration is pending, so the endpoint
+    cannot be used to discover which numbers are mid-registration.
+    """
+
+    serializer_class = WhatsAppSendOTPSerializer
+    permission_classes = [
+        permissions.AllowAny
+    ]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "otp"
+
+    def post(self, request):
+        serializer = self.get_serializer(
+            data=request.data
+        )
+
+        serializer.is_valid(
+            raise_exception=True
+        )
+
+        try:
+            phone_number = normalize_phone_number(
+                serializer.validated_data["phone_number"]
             )
-        ):
+        except InvalidPhoneNumberError as exc:
+            return Response(
+                {"error": str(exc), "code": "invalid_phone_number"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        pending = find_pending_registration_by_phone(phone_number)
+
+        if pending is None:
+            # Enumeration-safe: same shape as the success path.
+            return Response(
+                {
+                    "message": (
+                        "If a WhatsApp verification is pending for this "
+                        "number, a new code has been sent."
+                    ),
+                    "phone_number": phone_number,
+                },
+                status=status.HTTP_202_ACCEPTED,
+            )
+
+        try:
+            issued = issue_registration_otp(pending)
+        except OTPServiceError as exc:
+            return _otp_error_response(exc)
+
+        payload = _registration_payload(
+            pending,
+            delivery=delivery_channel(issued.delivery),
+            delivered=issued.delivery.delivered,
+            cooldown_seconds=settings.OTP_RESEND_COOLDOWN_SECONDS,
+        )
+
+        if settings.OTP_DEBUG_RETURN:
+            payload["debug_otp"] = issued.code
+
+        return Response(
+            payload,
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+
+# ============================================================
+# WHATSAPP VERIFY OTP (completes the registration)
+# ============================================================
+
+class WhatsAppVerifyOTPView(generics.GenericAPIView):
+    """Step 2 of the shared registration flow.
+
+    Verifies the OTP tied to a pending registration — entirely server-side —
+    then creates the permanent account with the role captured at
+    registration, marks the phone number as verified and returns the normal
+    JWT authentication response.  The request body cannot influence the role
+    or any other account attribute.
+    """
+
+    serializer_class = WhatsAppVerifyOTPSerializer
+    permission_classes = [
+        permissions.AllowAny
+    ]
+
+    def post(self, request):
+        serializer = self.get_serializer(
+            data=request.data
+        )
+
+        serializer.is_valid(
+            raise_exception=True
+        )
+
+        registration_id = serializer.validated_data["registration_id"]
+        otp_code = serializer.validated_data["otp"]
+
+        pending = find_pending_registration(registration_id)
+
+        if pending is None:
             return Response(
                 {
                     "error": (
-                        "Invalid or expired OTP."
-                    )
+                        "Your verification session could not be found or "
+                        "has expired. Please register again."
+                    ),
+                    "code": "registration_expired",
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        otp.consumed_at = timezone.now()
+        try:
+            user = complete_registration(pending, otp_code)
+        except OTPServiceError as exc:
+            return _otp_error_response(exc)
 
-        otp.save(
-            update_fields=[
-                "consumed_at"
-            ]
+        logger.info(
+            "Registration completed via WhatsApp OTP: user=%s role=%s",
+            user.pk,
+            user.role,
         )
 
-        request.user.is_otp_verified = True
+        payload = issue_tokens(user, request)
+        payload["registration"] = "completed"
+        payload["phone_verified"] = True
+        return Response(payload)
 
-        request.user.save(
-            update_fields=[
-                "is_otp_verified"
-            ]
+
+# ============================================================
+# OTP RESEND (pending registration)
+# ============================================================
+
+class OTPResendView(generics.GenericAPIView):
+    """Resend the WhatsApp OTP for a pending registration.
+
+    Invalidates the previous OTP, resets the attempt counter and enforces
+    both the resend cooldown and the per-registration request limit.
+    """
+
+    serializer_class = OTPResendSerializer
+    permission_classes = [
+        permissions.AllowAny
+    ]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "otp"
+
+    def post(self, request):
+        serializer = self.get_serializer(
+            data=request.data
         )
+
+        serializer.is_valid(
+            raise_exception=True
+        )
+
+        pending = find_pending_registration(
+            serializer.validated_data["registration_id"]
+        )
+
+        if pending is None:
+            return Response(
+                {
+                    "error": (
+                        "Your verification session could not be found or "
+                        "has expired. Please register again."
+                    ),
+                    "code": "registration_expired",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            issued = issue_registration_otp(pending)
+        except OTPServiceError as exc:
+            return _otp_error_response(exc)
+
+        payload = {
+            "message": "A new code has been sent to your WhatsApp.",
+            "delivery": delivery_channel(issued.delivery),
+            "delivered": issued.delivery.delivered,
+            "resend_cooldown": settings.OTP_RESEND_COOLDOWN_SECONDS,
+        }
+        payload.update(_whatsapp_service_info())
+
+        if settings.OTP_DEBUG_RETURN:
+            payload["debug_otp"] = issued.code
 
         return Response(
-            issue_tokens(request.user)
+            payload,
+            status=status.HTTP_202_ACCEPTED,
         )
 
 
