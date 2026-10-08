@@ -322,7 +322,7 @@ describe("OtpScreen — registration mode", () => {
     authApiMock.whatsappVerifyOtp.mockRejectedValue(
       apiError(503, {
         error: "WhatsApp verification is not configured on this server yet.",
-        code: "whatsapp_unavailable",
+        code: "whatsapp_not_configured",
       })
     );
 

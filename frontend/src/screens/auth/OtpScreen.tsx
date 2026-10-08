@@ -187,6 +187,11 @@ export default function OtpScreen() {
   const describeOtpError = (err: unknown, fallback = "Something went wrong. Please try again."): string => {
     const code = getApiErrorCode(err);
     switch (code) {
+      case "whatsapp_not_configured":
+        return getApiErrorMessage(
+          err,
+          "WhatsApp verification is not configured on the server yet. Please contact the administrator."
+        );
       case "whatsapp_unavailable":
         return getApiErrorMessage(
           err,

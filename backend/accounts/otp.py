@@ -102,8 +102,25 @@ class RegistrationExpiredError(OTPServiceError):
     message = "Your verification session has expired. Please register again."
 
 
+class WhatsAppNotConfiguredServiceError(OTPServiceError):
+    """WhatsApp delivery is disabled or Meta credentials are missing.
+
+    Deliberately distinct from ``whatsapp_unavailable`` (provider outage):
+    this error means the server is missing the Meta configuration
+    (``WHATSAPP_*`` values in ``backend/.env``) and no OTP can be delivered
+    until an administrator fills them in.
+    """
+
+    status_code = 503
+    code = "whatsapp_not_configured"
+    message = (
+        "WhatsApp verification is not configured on this server yet. "
+        "Set the WHATSAPP_* environment variables to enable it."
+    )
+
+
 class WhatsAppUnavailableError(OTPServiceError):
-    """WhatsApp delivery is disabled, unconfigured or failing."""
+    """WhatsApp delivery is configured but currently failing (provider side)."""
 
     status_code = 503
     code = "whatsapp_unavailable"
@@ -164,7 +181,7 @@ def _deliver(phone_number: str, code: str) -> DeliveryResult:
     try:
         return get_whatsapp_otp_service().send_otp(phone_number, code)
     except WhatsAppNotConfiguredError as exc:
-        raise WhatsAppUnavailableError(NOT_CONFIGURED_MESSAGE) from exc
+        raise WhatsAppNotConfiguredServiceError(NOT_CONFIGURED_MESSAGE) from exc
     except WhatsAppError as exc:
         # Sanitised provider failures only — raw details stay server-side.
         raise WhatsAppUnavailableError() from exc
@@ -173,11 +190,13 @@ def _deliver(phone_number: str, code: str) -> DeliveryResult:
 def ensure_whatsapp_available() -> None:
     """Raise when WhatsApp delivery cannot work at all (not configured).
 
-    Views call this BEFORE creating any state, so a server without WhatsApp
-    credentials never leaves half-finished registrations behind.
+    Views call this BEFORE creating any state, so a server without the Meta
+    configuration never leaves half-finished registrations behind.  Raises
+    :class:`WhatsAppNotConfiguredServiceError` (HTTP 503
+    ``whatsapp_not_configured``) — the honest answer, never a fake delivery.
     """
     if not get_whatsapp_otp_service().is_configured:
-        raise WhatsAppUnavailableError(NOT_CONFIGURED_MESSAGE)
+        raise WhatsAppNotConfiguredServiceError(NOT_CONFIGURED_MESSAGE)
 
 
 def delivery_channel(result: DeliveryResult) -> str:

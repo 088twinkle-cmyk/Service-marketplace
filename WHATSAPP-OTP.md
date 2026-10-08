@@ -88,6 +88,11 @@ stay separate.
 
 ## Environment variables (`backend/.env`)
 
+Copy `backend/.env.example` to `backend/.env` (git-ignored) and fill in the
+Meta values. **Never commit real credentials** — `backend/.env` is ignored
+by Git (`.gitignore` contains `.env`); `.env.example` keeps empty
+placeholders.
+
 ```env
 # Delivery is disabled by default until real credentials exist.
 WHATSAPP_OTP_ENABLED=false
@@ -119,25 +124,47 @@ PHONE_DEFAULT_COUNTRY_CODE=+977
 
 | State | Result |
 |-------|--------|
-| `WHATSAPP_OTP_ENABLED=true` + full credentials | Real Cloud API delivery |
-| `WHATSAPP_OTP_ENABLED=true`, no credentials, `DEBUG` | Development provider (simulated) |
-| `WHATSAPP_OTP_ENABLED=true`, no credentials, production | 503 `whatsapp_not_configured` — the server never pretends an OTP was sent |
-| `WHATSAPP_OTP_ENABLED=false` (default), `DEBUG` | Development provider (simulated) |
+| `WHATSAPP_OTP_ENABLED=true` + all required values | Real Cloud API delivery |
+| `WHATSAPP_OTP_ENABLED=true` + **any** value missing (DEBUG or not) | **503 `whatsapp_not_configured`** — enabling real delivery never silently downgrades to the simulated provider |
+| `WHATSAPP_OTP_ENABLED=false` (default), `DEBUG` | Development provider (simulated, clearly labelled) |
 | `WHATSAPP_OTP_ENABLED=false` (default), production | 503 `whatsapp_not_configured` |
+| `WHATSAPP_PROVIDER=cloud`, values missing | 503 `whatsapp_not_configured` |
+| `WHATSAPP_PROVIDER=development` (forced) | Simulated (logs a warning outside DEBUG) |
+
+## Required Meta credentials
+
+| `backend/.env` variable | What it is | Where to get it |
+|---|---|---|
+| `WHATSAPP_ACCESS_TOKEN` | **Secret.** System-user access token with the `whatsapp_business_messaging` permission (permanent). Backend only — never in React/Expo code, frontend `.env`, or Git. | <https://developers.facebook.com> → your app → **Business settings → System users** → *Generate access token* → tick `whatsapp_business_messaging` |
+| `WHATSAPP_PHONE_NUMBER_ID` | The "Phone number ID" of the sending number. Meta's messages endpoint is keyed on it: `POST /v21.0/{phone-number-id}/messages`. | App dashboard → **WhatsApp → API Setup** → "Phone number ID" |
+| `WHATSAPP_OTP_TEMPLATE_NAME` | Name of the **approved** message template. Meta requires a template for business-initiated messages (outside the 24-hour customer window), so the OTP is always sent as a template message with the code as the `{{1}}` body parameter — never a free-form text. | **WhatsApp Manager → Message templates** → create an *Authentication* template (or a Utility template with one body param, e.g. `{{1}} is your Service Marketplace verification code. It expires in 10 minutes.`) → wait for **APPROVED** |
+| `WHATSAPP_OTP_TEMPLATE_LANGUAGE` | Language of that template; must match exactly what Meta shows (`en_US`, `en`, `ne`, …). | Same template's language field |
+| `WHATSAPP_BUSINESS_ACCOUNT_ID` | WhatsApp Business Account ID — **optional for sending** (needed only for management APIs); `whatsapp_status` reports it as optional. | App dashboard → WhatsApp → API Setup |
+| `WHATSAPP_VERIFICATION_NUMBER` | The public business/sending number shown to users (`whatsapp_number` in API responses). Display info, not a credential. The actual sender on the wire is the Meta-registered number behind `WHATSAPP_PHONE_NUMBER_ID`. | Your business number (default `9843677123`, shown as `+977 9843677123`) |
 
 ## Enabling real WhatsApp delivery
 
 1. Create an app at <https://developers.facebook.com> → add the *WhatsApp*
-   product → note the **Phone Number ID** and **WhatsApp Business Account ID**.
-2. Create a system user and generate a permanent **access token**.
-3. In the WhatsApp Business Manager create an **authentication/OTP template**
-   with a body parameter for the code, e.g.
-   `{{1}} is your Service Marketplace verification code. It expires in 10 minutes.`
-   Get it approved.
-4. Fill the `WHATSAPP_*` values in `backend/.env` and set
-   `WHATSAPP_OTP_ENABLED=true`.
-5. Restart Django. Registration now delivers real WhatsApp OTPs from the
-   configured business number (+977 9843677123 by default).
+   product.
+2. Collect the values from the table above.
+3. Create the OTP template in WhatsApp Manager and wait for **approval**.
+4. Fill the `WHATSAPP_*` values in `backend/.env` (NOT `.env.example`) and
+   set `WHATSAPP_OTP_ENABLED=true`.
+5. Restart Django, then check readiness:
+
+   ```bash
+   python manage.py whatsapp_status
+   ```
+
+   The command prints setting **names** and set/unset state only — values
+   (especially the access token) are never printed, so its output is safe to
+   paste into a ticket or chat. While `WHATSAPP_OTP_ENABLED=true` and a
+   required value is missing, Django also raises a startup **system check
+   warning** (`accounts.W001`) naming the missing settings, and every OTP
+   request answers HTTP 503 `whatsapp_not_configured`.
+6. Verify end to end: register with your own phone number, confirm the
+   WhatsApp message arrives from the registered business number, then
+   complete the OTP.
 
 The destination of every OTP is the **user's own phone number**; the
 business number above is only the sender.
@@ -145,11 +172,24 @@ business number above is only the sender.
 ## Tests
 
 ```bash
-# Backend (WhatsApp provider mocked/development — no real API calls)
+# Backend — the Meta API is fully mocked; tests never send real messages
 cd backend
 python manage.py test tests
+
+# Configuration readiness (names only, values never printed)
+python manage.py whatsapp_status
 
 # Frontend
 cd frontend
 npm test
 ```
+
+The automated tests cover (with `requests.post` mocked or the development
+provider): the Cloud API request being a **template message** (configured
+name, language, OTP as the `{{1}}` body parameter) to
+`POST {base}/{version}/{phone-number-id}/messages` with the token as a
+Bearer header; each required credential being individually required
+(missing any one → 503 `whatsapp_not_configured`); `WHATSAPP_OTP_ENABLED=true`
+never falling back to the simulated provider; provider failures mapping to
+a sanitised `whatsapp_unavailable` 503 with raw Meta errors kept in server
+logs only; and `whatsapp_status` / the system check never printing values.

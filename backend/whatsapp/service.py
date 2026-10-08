@@ -85,15 +85,20 @@ def build_whatsapp_provider() -> WhatsAppProvider | None:
     Selection rules (``WHATSAPP_PROVIDER`` = auto | cloud | development):
 
     * ``cloud``        — always the real Cloud API provider.
-    * ``development``  — always the simulated development provider.
+    * ``development``  — always the simulated development provider (warns
+                         when used outside DEBUG).
     * ``auto`` (default):
-        - ``WHATSAPP_OTP_ENABLED=true``  → Cloud API when fully configured.
-        - otherwise → the development provider when ``DEBUG`` is on (local
-          development without credentials) and ``None`` in production.
-
-    Returning ``None`` means "verification delivery is not available", which
-    the API surfaces as an explicit "WhatsApp not configured" error — the
-    server never pretends an OTP was delivered.
+        - ``WHATSAPP_OTP_ENABLED=true``  → the Cloud API provider, AS IS.
+          When credentials are incomplete the provider reports
+          ``is_configured == False`` and every delivery attempt raises
+          ``WhatsAppNotConfiguredError``, which the API surfaces as
+          HTTP 503 ``whatsapp_not_configured``.  Enabling real delivery
+          must NEVER silently downgrade to the simulated provider — the
+          operator asked for WhatsApp messages, and the server says so.
+        - ``WHATSAPP_OTP_ENABLED=false`` (default) → the development
+          provider when ``DEBUG`` is on (local development without
+          credentials, clearly labelled ``simulated``) and ``None`` in
+          production (HTTP 503 ``whatsapp_not_configured``).
     """
     setting = (getattr(settings, "WHATSAPP_PROVIDER", "auto") or "auto").strip().lower()
     enabled = bool(getattr(settings, "WHATSAPP_OTP_ENABLED", False))
@@ -113,10 +118,10 @@ def build_whatsapp_provider() -> WhatsAppProvider | None:
 
     # auto
     if enabled:
-        cloud = _build_cloud_provider_from_settings()
-        if cloud.is_configured:
-            return cloud
-        return DevelopmentWhatsAppProvider() if debug else None
+        # Real delivery requested. If credentials are missing the provider
+        # stays unconfigured and every send raises WhatsAppNotConfiguredError
+        # → HTTP 503 whatsapp_not_configured. No simulation fallback here.
+        return _build_cloud_provider_from_settings()
 
     # Disabled by default: keep local development usable, production honest.
     return DevelopmentWhatsAppProvider() if debug else None

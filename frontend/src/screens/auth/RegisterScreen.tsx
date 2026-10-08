@@ -128,7 +128,7 @@ export default function RegisterScreen() {
     } catch (err) {
       const code = getApiErrorCode(err);
 
-      if (code === "whatsapp_unavailable") {
+      if (code === "whatsapp_not_configured" || code === "whatsapp_unavailable") {
         showPopup(
           "error",
           "WhatsApp not available",

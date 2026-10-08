@@ -146,6 +146,33 @@ class WhatsAppCloudProviderTests(TestCase):
         with self.assertRaises(WhatsAppNotConfiguredError):
             provider.send_otp("+9779843677123", "482731")
 
+    def test_every_required_credential_is_individually_required(self):
+        """Access token, Phone Number ID and template are all mandatory."""
+        complete = dict(
+            access_token="tok", phone_number_id="pid", template_name="otp"
+        )
+        self.assertTrue(make_cloud_provider(**complete).is_configured)
+
+        for missing_key in complete:
+            params = dict(complete)
+            params[missing_key] = ""
+            provider = make_cloud_provider(**params)
+            self.assertFalse(
+                provider.is_configured,
+                f"a missing {missing_key} must disable real delivery",
+            )
+
+    def test_template_language_defaults_and_is_sent_to_meta(self):
+        provider = make_cloud_provider(template_language="en")
+
+        with mock.patch("whatsapp.providers.cloud.requests.post") as post:
+            post.return_value.status_code = 200
+            post.return_value.json.return_value = {"messages": [{"id": "wamid.X"}]}
+            provider.send_otp("+9779843677123", "482731")
+
+        _, kwargs = post.call_args
+        self.assertEqual(kwargs["json"]["template"]["language"]["code"], "en")
+
 
 class ProviderSelectionTests(TestCase):
     def test_disabled_and_not_debug_means_no_provider(self):
@@ -167,16 +194,33 @@ class ProviderSelectionTests(TestCase):
             self.assertIsInstance(provider, WhatsAppCloudProvider)
             self.assertTrue(provider.is_configured)
 
-    def test_auto_enabled_without_credentials_is_not_configured_in_production(self):
-        with override_settings(
-            WHATSAPP_OTP_ENABLED=True,
-            WHATSAPP_PROVIDER="auto",
-            DEBUG=False,
-            WHATSAPP_ACCESS_TOKEN="",
-            WHATSAPP_PHONE_NUMBER_ID="",
-            WHATSAPP_OTP_TEMPLATE_NAME="",
-        ):
-            self.assertIsNone(build_whatsapp_provider())
+    def test_auto_enabled_without_credentials_never_downgrades_to_simulation(self):
+        """Requirement: enabled + missing credentials → honest 503, always.
+
+        Even with DEBUG=true the auto path must return the (unconfigured)
+        Cloud provider instead of silently simulating delivery.
+        """
+        for debug in (False, True):
+            with override_settings(
+                WHATSAPP_OTP_ENABLED=True,
+                WHATSAPP_PROVIDER="auto",
+                DEBUG=debug,
+                WHATSAPP_ACCESS_TOKEN="",
+                WHATSAPP_PHONE_NUMBER_ID="",
+                WHATSAPP_OTP_TEMPLATE_NAME="",
+            ):
+                provider = build_whatsapp_provider()
+                self.assertIsInstance(provider, WhatsAppCloudProvider)
+                self.assertFalse(provider.is_configured)
+
+                # Every delivery attempt raises the honest not-configured
+                # error, which the API maps to 503 whatsapp_not_configured.
+                service = get_whatsapp_otp_service()
+                self.assertFalse(service.is_configured)
+                from whatsapp import WhatsAppNotConfiguredError
+
+                with self.assertRaises(WhatsAppNotConfiguredError):
+                    service.send_otp("+9779843677123", "482731")
 
     def test_forced_cloud_provider_stays_unconfigured_without_credentials(self):
         with override_settings(
@@ -602,9 +646,25 @@ class WhatsAppConfigurationStatesTests(TestCase):
         response = self.client.post("/api/auth/register/", self.payload, format="json")
         self.assertEqual(response.status_code, 503, response.content)
         body = response.json()
-        self.assertEqual(body["code"], "whatsapp_unavailable")
+        self.assertEqual(body["code"], "whatsapp_not_configured")
         self.assertIn("not configured", body["error"])
         # Nothing was persisted — no half-finished registration.
+        self.assertEqual(PendingRegistration.objects.count(), 0)
+
+    @override_settings(
+        WHATSAPP_OTP_ENABLED=True,
+        WHATSAPP_PROVIDER="auto",
+        DEBUG=True,  # Even with DEBUG on there is no simulation fallback.
+        WHATSAPP_ACCESS_TOKEN="",
+        WHATSAPP_PHONE_NUMBER_ID="",
+        WHATSAPP_OTP_TEMPLATE_NAME="",
+    )
+    def test_enabled_with_missing_credentials_is_honest_even_in_debug(self):
+        response = self.client.post("/api/auth/register/", self.payload, format="json")
+        self.assertEqual(response.status_code, 503, response.content)
+        body = response.json()
+        self.assertEqual(body["code"], "whatsapp_not_configured")
+        self.assertIn("not configured", body["error"])
         self.assertEqual(PendingRegistration.objects.count(), 0)
 
     @override_settings(
@@ -639,6 +699,23 @@ class WhatsAppConfigurationStatesTests(TestCase):
         pending = PendingRegistration.objects.get(email="config@example.com")
         self.assertEqual(pending.otp_code_hash, "")
         self.assertFalse(User.objects.filter(email="config@example.com").exists())
+
+    @override_settings(
+        WHATSAPP_OTP_ENABLED=True,
+        WHATSAPP_PROVIDER="auto",
+        WHATSAPP_ACCESS_TOKEN="real-token-value",
+        WHATSAPP_PHONE_NUMBER_ID="",
+        WHATSAPP_OTP_TEMPLATE_NAME="otp",
+    )
+    def test_partial_configuration_still_answers_not_configured(self):
+        """Any single missing credential disables real delivery honestly."""
+        response = self.client.post("/api/auth/register/", self.payload, format="json")
+        self.assertEqual(response.status_code, 503, response.content)
+        body = response.json()
+        self.assertEqual(body["code"], "whatsapp_not_configured")
+        # The configured token value is never echoed back to the client.
+        self.assertNotIn("real-token-value", str(body))
+        self.assertEqual(PendingRegistration.objects.count(), 0)
 
 
 # ============================================================
@@ -758,3 +835,143 @@ class DevelopmentProviderTests(TestCase):
         result = provider.send_otp("+9779843677123", "123456")
         self.assertTrue(result.simulated)
         self.assertFalse(result.delivered)
+
+
+# ============================================================
+# Safe configuration checks (names only — values never exposed)
+# ============================================================
+
+class SafeConfigurationCheckTests(TestCase):
+    """The readiness helpers must report setting NAMES, never values."""
+
+    EMPTY_REQUIRED = dict(
+        WHATSAPP_ACCESS_TOKEN="",
+        WHATSAPP_PHONE_NUMBER_ID="",
+        WHATSAPP_OTP_TEMPLATE_NAME="",
+    )
+
+    def test_missing_settings_are_reported_by_name(self):
+        from whatsapp.config import missing_whatsapp_settings
+
+        with override_settings(**self.EMPTY_REQUIRED):
+            self.assertEqual(
+                set(missing_whatsapp_settings()),
+                {
+                    "WHATSAPP_ACCESS_TOKEN",
+                    "WHATSAPP_PHONE_NUMBER_ID",
+                    "WHATSAPP_OTP_TEMPLATE_NAME",
+                },
+            )
+
+    def test_status_is_serialisable_without_values(self):
+        import json
+
+        from whatsapp.config import whatsapp_configuration_status
+
+        with override_settings(
+            WHATSAPP_ACCESS_TOKEN="SECRET-TOKEN-XYZ",
+            WHATSAPP_PHONE_NUMBER_ID="",
+            WHATSAPP_OTP_TEMPLATE_NAME="otp",
+            WHATSAPP_BUSINESS_ACCOUNT_ID="WBA-SECRET-9",
+        ):
+            status = whatsapp_configuration_status()
+            dump = json.dumps(status)
+
+            # Names and booleans only: the missing setting is named …
+            self.assertIn("WHATSAPP_PHONE_NUMBER_ID", dump)
+            self.assertEqual(status["missing"], ["WHATSAPP_PHONE_NUMBER_ID"])
+            self.assertFalse(status["configured"])
+            self.assertTrue(status["optional"]["WHATSAPP_BUSINESS_ACCOUNT_ID"])
+            # … never values (neither the token nor the business id).
+            self.assertNotIn("SECRET-TOKEN-XYZ", dump)
+            self.assertNotIn("WBA-SECRET-9", dump)
+
+    def test_whatsapp_status_command_never_prints_values(self):
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        out = StringIO()
+        with override_settings(
+            WHATSAPP_OTP_ENABLED=True,
+            WHATSAPP_PROVIDER="auto",
+            WHATSAPP_ACCESS_TOKEN="SECRET-TOKEN-XYZ",
+            WHATSAPP_PHONE_NUMBER_ID="",
+            WHATSAPP_OTP_TEMPLATE_NAME="",
+        ):
+            call_command("whatsapp_status", stdout=out)
+
+        output = out.getvalue()
+        # Names + state only …
+        self.assertIn("WHATSAPP_PHONE_NUMBER_ID", output)
+        self.assertIn("WHATSAPP_OTP_TEMPLATE_NAME", output)
+        self.assertIn("NOT CONFIGURED", output)
+        self.assertIn("503", output)
+        # … never the secret value.
+        self.assertNotIn("SECRET-TOKEN-XYZ", output)
+
+    def test_whatsapp_status_command_reports_ready_when_configured(self):
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        out = StringIO()
+        with override_settings(
+            WHATSAPP_OTP_ENABLED=True,
+            WHATSAPP_PROVIDER="auto",
+            WHATSAPP_ACCESS_TOKEN="SECRET-TOKEN-XYZ",
+            WHATSAPP_PHONE_NUMBER_ID="pid",
+            WHATSAPP_OTP_TEMPLATE_NAME="otp",
+        ):
+            call_command("whatsapp_status", stdout=out)
+
+        output = out.getvalue()
+        self.assertIn("YES", output)
+        self.assertNotIn("Missing required settings", output)
+        # Still no values.
+        self.assertNotIn("SECRET-TOKEN-XYZ", output)
+
+    def test_system_check_warns_with_names_only_when_enabled_and_incomplete(self):
+        from accounts.checks import check_whatsapp_otp_configuration
+
+        with override_settings(
+            WHATSAPP_OTP_ENABLED=True,
+            WHATSAPP_PROVIDER="auto",
+            WHATSAPP_ACCESS_TOKEN="SECRET-TOKEN-XYZ",
+            WHATSAPP_PHONE_NUMBER_ID="",
+            WHATSAPP_OTP_TEMPLATE_NAME="otp",
+        ):
+            warnings = check_whatsapp_otp_configuration()
+            self.assertEqual(len(warnings), 1)
+            message = warnings[0].msg
+            # The missing NAME is named …
+            self.assertIn("WHATSAPP_PHONE_NUMBER_ID", message)
+            self.assertIn("503", message)
+            # … the configured VALUE is not.
+            self.assertNotIn("SECRET-TOKEN-XYZ", message)
+
+    def test_system_check_silent_when_disabled_or_complete(self):
+        from accounts.checks import check_whatsapp_otp_configuration
+
+        # Disabled (default) → nothing to warn about.
+        with override_settings(
+            WHATSAPP_OTP_ENABLED=False, **self.EMPTY_REQUIRED
+        ):
+            self.assertEqual(check_whatsapp_otp_configuration(), [])
+
+        # Enabled + fully configured → no warning.
+        with override_settings(
+            WHATSAPP_OTP_ENABLED=True,
+            WHATSAPP_ACCESS_TOKEN="tok",
+            WHATSAPP_PHONE_NUMBER_ID="pid",
+            WHATSAPP_OTP_TEMPLATE_NAME="otp",
+        ):
+            self.assertEqual(check_whatsapp_otp_configuration(), [])
+
+        # Enabled + incomplete but the mock is forced explicitly → no warning.
+        with override_settings(
+            WHATSAPP_OTP_ENABLED=True,
+            WHATSAPP_PROVIDER="development",
+            **self.EMPTY_REQUIRED,
+        ):
+            self.assertEqual(check_whatsapp_otp_configuration(), [])
