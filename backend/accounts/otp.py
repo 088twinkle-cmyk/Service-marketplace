@@ -3,16 +3,13 @@
 One service powers BOTH verification flows:
 
 * **Registration** — OTPs attached to a :class:`accounts.models.PendingRegistration`
-  (the permanent account is only created after the phone number is verified).
+  (the permanent account is only created after the email is verified).
 * **Login / re-verification** — OTPs attached to an existing user through the
   existing :class:`accounts.models.OTPCode` model.
 
 The service owns the whole OTP lifecycle: cryptographically secure
 generation, hashed storage, expiration, attempt limits, resend cooldowns,
-request limits, single-use semantics and delivery through the
-provider-agnostic :class:`whatsapp.WhatsAppOTPService`.
-
-Views/serializers never talk to a WhatsApp provider directly.
+request limits, single-use semantics and email delivery.
 """
 import hashlib
 import hmac
@@ -27,14 +24,15 @@ from django.utils import timezone
 
 from datetime import timedelta
 
-from whatsapp import (
-    DeliveryResult,
-    WhatsAppError,
-    WhatsAppNotConfiguredError,
-    get_whatsapp_otp_service,
-    phone_e164,
-)
+from whatsapp import phone_e164
 
+from .email_otp import (
+    EmailDeliveryError,
+    EmailDeliveryResult,
+    EmailNotConfiguredError,
+    email_delivery_configured,
+    send_email_otp,
+)
 from .models import OTPCode, PendingRegistration, User
 from .roles import normalize_role
 
@@ -102,29 +100,26 @@ class RegistrationExpiredError(OTPServiceError):
     message = "Your verification session has expired. Please register again."
 
 
-class WhatsAppNotConfiguredServiceError(OTPServiceError):
-    """WhatsApp delivery is disabled or Meta credentials are missing.
+class EmailNotConfiguredServiceError(OTPServiceError):
+    """The configured email backend cannot deliver messages.
 
-    Deliberately distinct from ``whatsapp_unavailable`` (provider outage):
-    this error means the server is missing the Meta configuration
-    (``WHATSAPP_*`` values in ``backend/.env``) and no OTP can be delivered
-    until an administrator fills them in.
+    The response contains no SMTP configuration values or credentials.
     """
 
     status_code = 503
-    code = "whatsapp_not_configured"
+    code = "email_not_configured"
     message = (
-        "WhatsApp verification is not configured on this server yet. "
-        "Set the WHATSAPP_* environment variables to enable it."
+        "Email verification is not configured on this server yet. "
+        "Configure the email backend to enable it."
     )
 
 
-class WhatsAppUnavailableError(OTPServiceError):
-    """WhatsApp delivery is configured but currently failing (provider side)."""
+class EmailUnavailableError(OTPServiceError):
+    """The configured email backend failed to accept a verification email."""
 
     status_code = 503
-    code = "whatsapp_unavailable"
-    message = "WhatsApp verification is unavailable right now. Please try again later."
+    code = "email_unavailable"
+    message = "Email verification is unavailable right now. Please try again later."
 
 
 # ============================================================
@@ -170,38 +165,28 @@ def pending_registration_ttl() -> timedelta:
     return timedelta(minutes=int(settings.PENDING_REGISTRATION_TTL_MINUTES))
 
 
-NOT_CONFIGURED_MESSAGE = (
-    "WhatsApp verification is not configured on this server yet. "
-    "Set the WHATSAPP_* environment variables to enable it."
-)
-
-
-def _deliver(phone_number: str, code: str) -> DeliveryResult:
-    """Send the OTP over WhatsApp, mapping provider errors to API states."""
+def _deliver(email: str, code: str) -> EmailDeliveryResult:
+    """Send the OTP by email, mapping backend errors to safe API states."""
     try:
-        return get_whatsapp_otp_service().send_otp(phone_number, code)
-    except WhatsAppNotConfiguredError as exc:
-        raise WhatsAppNotConfiguredServiceError(NOT_CONFIGURED_MESSAGE) from exc
-    except WhatsAppError as exc:
-        # Sanitised provider failures only — raw details stay server-side.
-        raise WhatsAppUnavailableError() from exc
+        return send_email_otp(email, code)
+    except EmailNotConfiguredError as exc:
+        raise EmailNotConfiguredServiceError() from exc
+    except EmailDeliveryError as exc:
+        raise EmailUnavailableError() from exc
 
 
-def ensure_whatsapp_available() -> None:
-    """Raise when WhatsApp delivery cannot work at all (not configured).
-
-    Views call this BEFORE creating any state, so a server without the Meta
-    configuration never leaves half-finished registrations behind.  Raises
-    :class:`WhatsAppNotConfiguredServiceError` (HTTP 503
-    ``whatsapp_not_configured``) — the honest answer, never a fake delivery.
-    """
-    if not get_whatsapp_otp_service().is_configured:
-        raise WhatsAppNotConfiguredServiceError(NOT_CONFIGURED_MESSAGE)
+def ensure_email_available() -> None:
+    """Raise before creating state when email delivery cannot work."""
+    try:
+        configured = email_delivery_configured()
+    except (AttributeError, ValueError):
+        configured = False
+    if not configured:
+        raise EmailNotConfiguredServiceError()
 
 
-def delivery_channel(result: DeliveryResult) -> str:
-    """"whatsapp" for real delivery, "simulated" for the development provider."""
-    return "simulated" if result.simulated else "whatsapp"
+def delivery_channel(result: EmailDeliveryResult) -> str:
+    return "simulated" if result.simulated else "email"
 
 
 @dataclass(frozen=True)
@@ -213,7 +198,7 @@ class IssuedOTP:
     """
 
     code: str
-    delivery: DeliveryResult
+    delivery: EmailDeliveryResult
 
 
 def phone_number_taken(phone_number: str) -> bool:
@@ -321,7 +306,7 @@ def issue_registration_otp(pending: PendingRegistration) -> IssuedOTP:
         raise OTPRequestLimitError()
 
     code = generate_otp()
-    result = _deliver(pending.phone_number, code)
+    result = _deliver(pending.email, code)
 
     pending.otp_code_hash = hash_otp(code)
     pending.otp_expires_at = timezone.now() + timedelta(minutes=policy.expiry_minutes)
@@ -394,7 +379,7 @@ def complete_registration(pending: PendingRegistration, code: str) -> User:
             )
         if phone_number_taken(pending.phone_number):
             raise OTPServiceError(
-                "An account with this WhatsApp number already exists.",
+                "An account with this phone number already exists.",
                 code="phone_taken",
             )
 
@@ -420,13 +405,13 @@ def complete_registration(pending: PendingRegistration, code: str) -> User:
         # registration.
         pending.otp_code_hash = ""
         pending.otp_expires_at = timezone.now()
-        pending.phone_verified_at = timezone.now()
+        pending.email_verified_at = timezone.now()
         pending.status = PendingRegistration.Status.CONSUMED
         pending.save(
             update_fields=[
                 "otp_code_hash",
                 "otp_expires_at",
-                "phone_verified_at",
+                "email_verified_at",
                 "status",
                 "updated_at",
             ]
@@ -451,11 +436,11 @@ def find_pending_registration(registration_id: str) -> PendingRegistration | Non
     return pending
 
 
-def find_pending_registration_by_phone(phone_number: str) -> PendingRegistration | None:
-    """Newest active pending registration for a normalised phone number."""
+def find_pending_registration_by_email(email: str) -> PendingRegistration | None:
+    """Newest active pending registration for an email address."""
     return (
         PendingRegistration.objects.filter(
-            phone_number=phone_number,
+            email__iexact=email.strip(),
             status=PendingRegistration.Status.PENDING,
             expires_at__gt=timezone.now(),
         )
@@ -469,32 +454,21 @@ def find_pending_registration_by_phone(phone_number: str) -> PendingRegistration
 # ============================================================
 
 def issue_user_otp(user: User, purpose: str = "login") -> IssuedOTP:
-    """Generate + deliver a WhatsApp OTP for an existing (unverified) user.
+    """Generate + email an OTP for an existing (unverified) user.
 
-    Reuses the existing ``OTPCode`` model, now with WhatsApp delivery, a
-    resend cooldown and attempt tracking.  Old unconsumed codes are
+    Reuses the existing ``OTPCode`` model, with email delivery, a resend
+    cooldown and attempt tracking. Old unconsumed codes are
     invalidated so only one code is ever valid.
     """
     policy = otp_policy()
     now = timezone.now()
 
-    if not user.phone:
+    if not user.email:
         raise OTPServiceError(
-            "Your account has no WhatsApp number on file. "
+            "Your account has no email address on file. "
             "Please contact support to verify your account.",
-            code="phone_missing",
+            code="email_missing",
         )
-
-    from whatsapp import InvalidPhoneNumberError, normalize_phone_number
-
-    try:
-        phone_number = normalize_phone_number(user.phone)
-    except InvalidPhoneNumberError:
-        raise OTPServiceError(
-            "The phone number on your account is not a valid WhatsApp number. "
-            "Please contact support to verify your account.",
-            code="phone_missing",
-        ) from None
 
     latest = OTPCode.objects.filter(user=user).order_by("-created_at").first()
     if latest is not None:
@@ -507,7 +481,7 @@ def issue_user_otp(user: User, purpose: str = "login") -> IssuedOTP:
             )
 
     code = generate_otp()
-    result = _deliver(phone_number, code)
+    result = _deliver(user.email, code)
 
     # Single active code per user: retire everything older.
     OTPCode.objects.filter(user=user, consumed_at__isnull=True).update(consumed_at=now)
@@ -517,7 +491,7 @@ def issue_user_otp(user: User, purpose: str = "login") -> IssuedOTP:
         code_hash=hash_otp(code),
         expires_at=now + timedelta(minutes=policy.expiry_minutes),
         purpose=purpose,
-        phone_number=phone_number,
+        phone_number="",
     )
     return IssuedOTP(code=code, delivery=result)
 

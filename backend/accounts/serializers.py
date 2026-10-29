@@ -123,7 +123,7 @@ class RegisterSerializer(serializers.ModelSerializer):
     """Validates a shared customer/provider registration submission.
 
     No user is created here — the data goes into a PendingRegistration and
-    the permanent account is only created after the WhatsApp OTP is verified
+    the permanent account is only created after the email OTP is verified
     (see accounts.otp.complete_registration).
     """
 
@@ -178,7 +178,7 @@ class RegisterSerializer(serializers.ModelSerializer):
 
         if phone_number_taken(normalized):
             raise serializers.ValidationError(
-                "An account with this WhatsApp number already exists."
+                "An account with this phone number already exists."
             )
         return normalized
 
@@ -208,7 +208,7 @@ class OTPVerifySerializer(serializers.Serializer):
         code = attrs.get("code") or attrs.pop("otp", None)
         if not code:
             raise serializers.ValidationError(
-                {"code": "Enter the 6-digit code sent to your WhatsApp."}
+                {"code": "Enter the 6-digit code sent to your email."}
             )
         attrs["code"] = code
         return attrs
@@ -218,13 +218,13 @@ class OTPVerifySerializer(serializers.Serializer):
 # WHATSAPP OTP (shared registration verification)
 # ============================================================
 
-class WhatsAppSendOTPSerializer(serializers.Serializer):
-    """Request an OTP for a phone number with a pending registration."""
+class EmailSendOTPSerializer(serializers.Serializer):
+    """Request an OTP for an email with a pending registration."""
 
-    phone_number = serializers.CharField(required=True, max_length=32)
+    email = serializers.EmailField(required=True)
 
 
-class WhatsAppVerifyOTPSerializer(serializers.Serializer):
+class EmailVerifyOTPSerializer(serializers.Serializer):
     """Complete registration: verify the OTP tied to a pending registration."""
 
     registration_id = serializers.CharField(required=True, max_length=64)
@@ -233,7 +233,7 @@ class WhatsAppVerifyOTPSerializer(serializers.Serializer):
     def validate_otp(self, value):
         cleaned = str(value).strip()
         if not cleaned.isdigit() or len(cleaned) != 6:
-            raise serializers.ValidationError("Enter the 6-digit code from WhatsApp.")
+            raise serializers.ValidationError("Enter the 6-digit code from your email.")
         return cleaned
 
 

@@ -2,8 +2,8 @@
  * RegisterScreen — step 1 of the shared customer/provider registration.
  *
  * The form submits to `authApi.register`; the backend stores a PENDING
- * registration (no account yet) and sends a WhatsApp OTP to the phone
- * number.  The screen then hands over to the shared OtpScreen
+ * registration (no account yet) and sends an email OTP. The screen then
+ * hands over to the shared OtpScreen
  * (`/otp`) with the registration id — verification completes the account
  * and routes by role (customer → home, provider → provider flow).
  */
@@ -79,7 +79,7 @@ export default function RegisterScreen() {
     else if (username.trim().length < 3) nextErrors.username = "Use at least 3 characters.";
     if (!email.trim()) nextErrors.email = "Enter your email for account recovery.";
     else if (!/^\S+@\S+\.\S+$/.test(email.trim())) nextErrors.email = "That email looks incomplete.";
-    if (!phone.trim()) nextErrors.phone = "Enter the WhatsApp number that should receive your verification code.";
+    if (!phone.trim()) nextErrors.phone = "Enter a phone number for your profile.";
     if (password.length < 6) nextErrors.password = "Use at least 6 characters.";
 
     setErrors(nextErrors);
@@ -105,36 +105,35 @@ export default function RegisterScreen() {
       // Keep the registration context for refresh-safety on the OTP screen.
       await setPendingRegistration({
         registrationId: data.registration_id,
-        phoneNumber: data.phone_number,
+        email: data.email,
       });
 
       showPopup(
         "success",
-        "WhatsApp code sent",
+        "Email code sent",
         data.delivery === "simulated"
-          ? "Development mode: WhatsApp delivery is simulated — no real message was sent. Continue with the code below."
-          : `We've sent a 6-digit code to your WhatsApp number ${data.phone_number}.`,
+          ? "Development mode: email delivery is simulated. Check the backend console or use the development code below."
+          : `We've sent a 6-digit code to ${data.email}.`,
         () =>
           router.replace({
             pathname: "/otp",
             params: {
               registration_id: data.registration_id,
-              phone: data.phone_number,
+              email: data.email,
               role: data.role_key,
-              whatsapp_number: data.whatsapp_number ?? "",
             },
           } as never)
       );
     } catch (err) {
       const code = getApiErrorCode(err);
 
-      if (code === "whatsapp_not_configured" || code === "whatsapp_unavailable") {
+      if (code === "email_not_configured" || code === "email_unavailable") {
         showPopup(
           "error",
-          "WhatsApp not available",
+          "Email not available",
           getApiErrorMessage(
             err,
-            "WhatsApp verification is not configured on the server yet. Please try again later."
+            "Email verification is not configured on the server yet. Please try again later."
           )
         );
         return;
@@ -153,13 +152,13 @@ export default function RegisterScreen() {
     >
       <AuthLayout
         title="Create your account"
-        subtitle="Choose how you want to use the marketplace, then verify your WhatsApp number."
+        subtitle="Choose how you want to use the marketplace, then verify your email."
         showBack
         onBack={() => router.back()}
       >
         <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
           <View style={styles.trail}>
-            <StepTrail steps={["Your details", "Verify WhatsApp"]} current={0} />
+            <StepTrail steps={["Your details", "Verify email"]} current={0} />
           </View>
 
           <View style={styles.roleRow}>
@@ -223,7 +222,7 @@ export default function RegisterScreen() {
           />
 
           <Input
-            label="WhatsApp number"
+            label="Phone number"
             placeholder="+977 98XXXXXXXX"
             value={phone}
             onChangeText={(text) => {
@@ -232,7 +231,7 @@ export default function RegisterScreen() {
             }}
             keyboardType="phone-pad"
             error={errors.phone}
-            hint="We'll send your 6-digit verification code to this WhatsApp number."
+            hint="Used for your marketplace profile. Your verification code goes to your email."
             required
           />
 
@@ -267,13 +266,14 @@ export default function RegisterScreen() {
           </View>
 
           <View style={styles.hintBox}>
-            <Text style={styles.hintTitle}>Why we verify your WhatsApp</Text>
+            <Text style={styles.hintTitle}>Why we verify your email</Text>
             <Text style={styles.hintText}>
-              A verified WhatsApp number keeps fake accounts out of the marketplace. Providers
-              additionally submit an identity document (KYC) before they can publish services.
+              A verified email helps keep accounts secure and gives you a place to receive
+              account and booking updates. Providers additionally submit an identity document
+              (KYC) before they can publish services.
             </Text>
             <View style={styles.chipRow}>
-              <Chip label="WhatsApp OTP" size="sm" active />
+              <Chip label="Email OTP" size="sm" active />
               <Chip label="KYC for providers" size="sm" />
             </View>
           </View>

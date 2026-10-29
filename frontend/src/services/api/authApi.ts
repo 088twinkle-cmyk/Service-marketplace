@@ -16,20 +16,19 @@ export type RegisterPayload = {
 
 /**
  * Step 1 of registration: the backend stores a pending registration and
- * sends a WhatsApp OTP.  The permanent account (and JWTs) only exist after
- * `whatsappVerifyOtp` succeeds.
+ * sends an email OTP. The permanent account (and JWTs) only exist after
+ * `emailVerifyOtp` succeeds.
  */
 export type RegistrationStartResponse = {
   registration_id: string;
-  phone_number: string;
+  email: string;
   role: string;
   role_key: string;
   expires_in: number;
   otp_expires_in: number;
   resend_cooldown: number;
-  delivery: "whatsapp" | "simulated" | "recently_sent";
+  delivery: "email" | "simulated" | "recently_sent";
   delivered: boolean;
-  whatsapp_number: string;
   otp_already_sent?: boolean;
   message?: string;
   debug_otp?: string;
@@ -37,10 +36,9 @@ export type RegistrationStartResponse = {
 
 export type OtpResendResponse = {
   message: string;
-  delivery: "whatsapp" | "simulated";
+  delivery: "email" | "simulated";
   delivered: boolean;
   resend_cooldown: number;
-  whatsapp_number: string;
   debug_otp?: string;
 };
 
@@ -61,17 +59,17 @@ export type AuthResponse = {
   access: string;
   user: AuthUser;
   otp_required?: boolean;
-  otp_channel?: "whatsapp";
+  otp_channel?: "email";
   registration?: string;
-  phone_verified?: boolean;
+  email_verified?: boolean;
   debug_otp?: string;
 };
 
 export type RequestOtpResponse = {
   message: string;
-  delivery: "whatsapp" | "simulated";
+  delivery: "email" | "simulated";
   resend_cooldown: number;
-  whatsapp_number: string;
+  email: string;
   debug_otp?: string;
 };
 
@@ -112,7 +110,7 @@ export function getApiRetryAfter(err: unknown, fallback = 45): number {
 
 export const authApi = {
   // Register a new account (customer or provider). The backend stores a
-  // pending registration and sends a WhatsApp OTP — no account exists yet.
+  // pending registration and sends an email OTP — no account exists yet.
   register: (data: RegisterPayload) =>
     authClient.post<RegistrationStartResponse>(
       "api/auth/register/",
@@ -126,21 +124,20 @@ export const authApi = {
       data
     ),
 
-  // Complete registration: verify the WhatsApp OTP tied to the pending
+  // Complete registration: verify the email OTP tied to the pending
   // registration.  Returns the normal JWT authentication response.
-  whatsappVerifyOtp: (registrationId: string, otp: string) =>
+  emailVerifyOtp: (registrationId: string, otp: string) =>
     authClient.post<AuthResponse>(
-      "api/auth/whatsapp/verify-otp/",
+      "api/auth/email/verify-otp/",
       { registration_id: registrationId, otp },
       {}
     ),
 
-  // Re-request an OTP by phone number (recovers the flow after a page
-  // refresh, when the registration id was lost).
-  whatsappSendOtp: (phoneNumber: string) =>
-    authClient.post<RegistrationStartResponse | { message: string; phone_number: string }>(
-      "api/auth/whatsapp/send-otp/",
-      { phone_number: phoneNumber },
+  // Re-request an OTP by email (recovers the flow after a page refresh).
+  emailSendOtp: (email: string) =>
+    authClient.post<RegistrationStartResponse | { message: string; email: string }>(
+      "api/auth/email/send-otp/",
+      { email },
       {}
     ),
 
@@ -165,7 +162,7 @@ export const authApi = {
       }
     ),
 
-  // Request/resend OTP for an authenticated user (their WhatsApp number).
+  // Request/resend OTP for an authenticated user's email.
   requestOtp: (accessToken: string) =>
     authClient.post<RequestOtpResponse>(
       "api/auth/otp/request/",

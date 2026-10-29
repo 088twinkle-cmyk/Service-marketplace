@@ -1,10 +1,9 @@
 /**
- * OtpScreen — the shared WhatsApp verification screen.
+ * OtpScreen — the shared email verification screen.
  *
  * Covers the three entry modes (registration, login re-verification,
- * phone-number recovery), the resend cooldown and the error states the
- * backend can produce.  The API layer is fully mocked — no test touches a
- * real backend or WhatsApp provider.
+ * email recovery), the resend cooldown and the error states the backend can
+ * produce. The API layer is fully mocked.
  */
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,8 +12,8 @@ import { act, renderAt, type RenderResult } from "./test/render";
 const authApiMock = vi.hoisted(() => ({
   register: vi.fn(),
   login: vi.fn(),
-  whatsappVerifyOtp: vi.fn(),
-  whatsappSendOtp: vi.fn(),
+  emailVerifyOtp: vi.fn(),
+  emailSendOtp: vi.fn(),
   otpResend: vi.fn(),
   verifyOtp: vi.fn(),
   requestOtp: vi.fn(),
@@ -52,7 +51,7 @@ vi.mock("./services/api/client", async () => {
 import OtpScreen from "./screens/auth/OtpScreen";
 
 const REGISTRATION_URL =
-  "/otp?registration_id=reg-token-1&phone=%2B9779843677123&role=provider&whatsapp_number=%2B9779843677123";
+  "/otp?registration_id=reg-token-1&email=back%40example.com&role=provider";
 
 const AUTH_SUCCESS = {
   access: "access-1",
@@ -132,26 +131,25 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe("OtpScreen — phone recovery mode (no context)", () => {
-  it("asks for the WhatsApp number when there is nothing to resume", async () => {
+describe("OtpScreen — email recovery mode (no context)", () => {
+  it("asks for the email address when there is nothing to resume", async () => {
     const view = await mountOtp("/otp");
 
-    expect(view.text()).toContain("Verify your WhatsApp");
-    expect(view.text()).toContain("WhatsApp number");
+    expect(view.text()).toContain("Verify your email");
+    expect(view.text()).toContain("Email address");
     expect(view.text()).toContain("Send OTP");
     // No code was requested behind the user's back.
     expect(authApiMock.requestOtp).not.toHaveBeenCalled();
     expect(authApiMock.otpResend).not.toHaveBeenCalled();
   });
 
-  it("resumes a pending registration after entering the number", async () => {
-    authApiMock.whatsappSendOtp.mockResolvedValue({
+  it("resumes a pending registration after entering the email address", async () => {
+    authApiMock.emailSendOtp.mockResolvedValue({
       data: {
         registration_id: "reg-token-1",
-        phone_number: "+9779843677123",
+        email: "back@example.com",
         resend_cooldown: 45,
-        whatsapp_number: "+9779843677123",
-        delivery: "whatsapp",
+        delivery: "email",
         delivered: true,
       },
     });
@@ -165,25 +163,25 @@ describe("OtpScreen — phone recovery mode (no context)", () => {
         window.HTMLInputElement.prototype,
         "value"
       )!.set!;
-      setter.call(input, "+977 9843677123");
+      setter.call(input, "back@example.com");
       input?.dispatchEvent(new Event("input", { bubbles: true }));
     });
 
     await press(view, "Send OTP");
     await settle();
 
-    expect(authApiMock.whatsappSendOtp).toHaveBeenCalledWith("+977 9843677123");
+    expect(authApiMock.emailSendOtp).toHaveBeenCalledWith("back@example.com");
     // Now in registration mode: OTP entry + resend with cooldown.
     expect(view.text()).toContain("Resend OTP in 45s");
     expect(findElement(view, "Verify")).toBeTruthy();
   });
 
   it("tells the user when no pending verification exists (enumeration-safe)", async () => {
-    authApiMock.whatsappSendOtp.mockResolvedValue({
+    authApiMock.emailSendOtp.mockResolvedValue({
       data: {
         message:
-          "If a WhatsApp verification is pending for this number, a new code has been sent.",
-        phone_number: "+9779800000000",
+          "If an email verification is pending for this address, a new code has been sent.",
+        email: "missing@example.com",
       },
     });
 
@@ -194,7 +192,7 @@ describe("OtpScreen — phone recovery mode (no context)", () => {
         window.HTMLInputElement.prototype,
         "value"
       )!.set!;
-      setter.call(input, "+9779800000000");
+      setter.call(input, "missing@example.com");
       input?.dispatchEvent(new Event("input", { bubbles: true }));
     });
 
@@ -206,11 +204,11 @@ describe("OtpScreen — phone recovery mode (no context)", () => {
 });
 
 describe("OtpScreen — registration mode", () => {
-  it("shows the WhatsApp context and the locked role", async () => {
+  it("shows the email context and the locked role", async () => {
     const view = await mountOtp(REGISTRATION_URL);
 
-    expect(view.text()).toContain("Verify your WhatsApp");
-    expect(view.text()).toContain("+9779843677123");
+    expect(view.text()).toContain("Verify your email");
+    expect(view.text()).toContain("back@example.com");
     expect(view.text()).toContain("Verifying your provider account");
     expect(findElement(view, "Verify")).toBeTruthy();
     expect(findElement(view, "Resend OTP")).toBeTruthy();
@@ -219,11 +217,10 @@ describe("OtpScreen — registration mode", () => {
   it("autofills the dev code from a resend and enforces the cooldown", async () => {
     authApiMock.otpResend.mockResolvedValue({
       data: {
-        message: "A new code has been sent to your WhatsApp.",
+        message: "A new code has been sent to your email.",
         delivery: "simulated",
         delivered: false,
         resend_cooldown: 45,
-        whatsapp_number: "+9779843677123",
         debug_otp: "654321",
       },
     });
@@ -243,7 +240,7 @@ describe("OtpScreen — registration mode", () => {
   });
 
   it("verifies the code, stores the JWT and routes by role", async () => {
-    authApiMock.whatsappVerifyOtp.mockResolvedValue({ data: AUTH_SUCCESS });
+    authApiMock.emailVerifyOtp.mockResolvedValue({ data: AUTH_SUCCESS });
 
     const view = await mountOtp(REGISTRATION_URL);
 
@@ -263,10 +260,11 @@ describe("OtpScreen — registration mode", () => {
     await press(view, "Verify");
     await settle();
 
-    expect(authApiMock.whatsappVerifyOtp).toHaveBeenCalledWith("reg-token-1", "482731");
-    expect(bodyText()).toContain("WhatsApp verified");
+    expect(authApiMock.emailVerifyOtp).toHaveBeenCalledWith("reg-token-1", "482731");
+    expect(bodyText()).toContain("Email verified");
+    expect(window.localStorage.getItem("token")).toBe("access-1");
 
-    // The JWT is stored once the popup is confirmed.
+    // The verified session remains stored after the success popup is confirmed.
     await pressInDocument("Continue");
     expect(window.localStorage.getItem("token")).toBe("access-1");
     expect(window.localStorage.getItem("role")).toBe("FREELANCER");
@@ -275,7 +273,7 @@ describe("OtpScreen — registration mode", () => {
   });
 
   it("shows an inline error for an incorrect code", async () => {
-    authApiMock.whatsappVerifyOtp.mockRejectedValue(
+    authApiMock.emailVerifyOtp.mockRejectedValue(
       apiError(400, {
         error: "That code is incorrect. 4 attempts left.",
         code: "otp_invalid",
@@ -318,11 +316,11 @@ describe("OtpScreen — registration mode", () => {
     expect(bodyText()).toContain("Verification expired");
   });
 
-  it("explains when WhatsApp is not configured on the server", async () => {
-    authApiMock.whatsappVerifyOtp.mockRejectedValue(
+  it("explains when email is not configured on the server", async () => {
+    authApiMock.emailVerifyOtp.mockRejectedValue(
       apiError(503, {
-        error: "WhatsApp verification is not configured on this server yet.",
-        code: "whatsapp_not_configured",
+        error: "Email verification is not configured on this server yet.",
+        code: "email_not_configured",
       })
     );
 
@@ -348,16 +346,16 @@ describe("OtpScreen — registration mode", () => {
 });
 
 describe("OtpScreen — login mode (unverified existing account)", () => {
-  it("requests the WhatsApp OTP automatically for a signed-in user", async () => {
+  it("requests the email OTP automatically for a signed-in user", async () => {
     window.localStorage.setItem("token", "stored-access");
     window.localStorage.setItem("email", "back@example.com");
 
     authApiMock.requestOtp.mockResolvedValue({
       data: {
-        message: "OTP sent to your WhatsApp number.",
-        delivery: "whatsapp",
+        message: "OTP sent to your email address.",
+        delivery: "email",
         resend_cooldown: 45,
-        whatsapp_number: "+9779843677123",
+        email: "back@example.com",
         debug_otp: "246810",
       },
     });
@@ -380,10 +378,10 @@ describe("OtpScreen — login mode (unverified existing account)", () => {
 
     authApiMock.requestOtp.mockResolvedValue({
       data: {
-        message: "OTP sent to your WhatsApp number.",
-        delivery: "whatsapp",
+        message: "OTP sent to your email address.",
+        delivery: "email",
         resend_cooldown: 0,
-        whatsapp_number: "+9779843677123",
+        email: "back@example.com",
         debug_otp: "135790",
       },
     });
@@ -397,6 +395,6 @@ describe("OtpScreen — login mode (unverified existing account)", () => {
     await settle();
 
     expect(authApiMock.verifyOtp).toHaveBeenCalledWith("stored-access", "135790");
-    expect(bodyText()).toContain("WhatsApp verified");
+    expect(bodyText()).toContain("Email verified");
   });
 });

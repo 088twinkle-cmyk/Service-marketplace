@@ -31,11 +31,6 @@ from rest_framework_simplejwt.token_blacklist.models import (
     OutstandingToken,
 )
 
-from whatsapp import (
-    InvalidPhoneNumberError,
-    normalize_phone_number,
-)
-
 import logging
 
 logger = logging.getLogger("marketplace")
@@ -53,9 +48,9 @@ from .otp import (
     complete_registration,
     create_pending_registration,
     delivery_channel,
-    ensure_whatsapp_available,
+    ensure_email_available,
     find_pending_registration,
-    find_pending_registration_by_phone,
+    find_pending_registration_by_email,
     issue_registration_otp,
     issue_user_otp,
     verify_user_otp,
@@ -80,13 +75,13 @@ from .serializers import (
     ProfileUpdateSerializer,
     RegisterSerializer,
     UserSerializer,
-    WhatsAppSendOTPSerializer,
-    WhatsAppVerifyOTPSerializer,
+    EmailSendOTPSerializer,
+    EmailVerifyOTPSerializer,
 )
 
 
 # ============================================================
-# OTP / WHATSAPP VERIFICATION
+# OTP / EMAIL VERIFICATION
 # ============================================================
 
 def issue_tokens(user: User, request=None):
@@ -107,17 +102,6 @@ def _otp_error_response(exc: OTPServiceError):
     return Response(payload, status=exc.status_code)
 
 
-def _whatsapp_service_info() -> dict:
-    """Non-sensitive display info for verification screens."""
-    from whatsapp import get_whatsapp_otp_service
-
-    service = get_whatsapp_otp_service()
-    return {
-        "whatsapp_number": service.verification_number,
-        "provider_configured": service.is_configured,
-    }
-
-
 def _registration_payload(
     pending,
     *,
@@ -129,7 +113,7 @@ def _registration_payload(
 
     payload = {
         "registration_id": pending.registration_token,
-        "phone_number": pending.phone_number,
+        "email": pending.email,
         "role": pending.role,
         "role_key": role_key(pending.role),
         "expires_in": max(
@@ -148,19 +132,18 @@ def _registration_payload(
         "delivery": delivery,
         "delivered": delivered,
     }
-    payload.update(_whatsapp_service_info())
     return payload
 
 
 # ============================================================
-# REGISTER (shared customer + provider flow, WhatsApp OTP)
+# REGISTER (shared customer + provider flow, email OTP)
 # ============================================================
 
 class RegisterView(generics.CreateAPIView):
     """Step 1 of the shared registration flow.
 
     Validates the submission (role-independent for customers AND providers),
-    stores it as a PendingRegistration and sends a WhatsApp OTP to the
+    stores it as a PendingRegistration and sends an email OTP to the
     submitted phone number.  The permanent account — with the exact role
     chosen here — is only created after the OTP is verified.
     """
@@ -190,7 +173,7 @@ class RegisterView(generics.CreateAPIView):
 
         try:
             # Fail fast (no state) when delivery cannot work at all.
-            ensure_whatsapp_available()
+            ensure_email_available()
         except OTPServiceError as exc:
             return _otp_error_response(exc)
 
@@ -216,7 +199,7 @@ class RegisterView(generics.CreateAPIView):
             )
             payload["otp_already_sent"] = True
             payload["message"] = (
-                f"A verification code was recently sent to your WhatsApp. "
+                f"A verification code was recently sent to your email. "
                 f"You can request a new one in {exc.retry_after_seconds}s."
             )
             return Response(
@@ -234,8 +217,7 @@ class RegisterView(generics.CreateAPIView):
         )
 
         if settings.OTP_DEBUG_RETURN:
-            # Development convenience only (never in production): lets the
-            # local flow complete without a real WhatsApp integration.
+            # Development convenience only (never in production).
             payload["debug_otp"] = issued.code
 
         return Response(
@@ -300,11 +282,11 @@ class LoginView(generics.GenericAPIView):
         payload = issue_tokens(user, request)
 
         if not user.is_otp_verified:
-            # The WhatsApp OTP is requested explicitly from the verification
+            # The email OTP is requested explicitly from the verification
             # screen (`/api/auth/otp/request/`), so logging in alone never
-            # spams a user's WhatsApp.
+            # spams a user's email.
             payload["otp_required"] = True
-            payload["otp_channel"] = "whatsapp"
+            payload["otp_channel"] = "email"
 
         return Response(payload)
 
@@ -314,7 +296,7 @@ class LoginView(generics.GenericAPIView):
 # ============================================================
 
 class OTPRequestView(generics.GenericAPIView):
-    """Sends a WhatsApp OTP to the authenticated user's phone number."""
+    """Sends an email OTP to the authenticated user's email address."""
 
     serializer_class = OTPRequestSerializer
     permission_classes = [
@@ -330,11 +312,11 @@ class OTPRequestView(generics.GenericAPIView):
             return _otp_error_response(exc)
 
         data = {
-            "message": "OTP sent to your WhatsApp number.",
+            "message": "OTP sent to your email address.",
             "delivery": delivery_channel(issued.delivery),
             "resend_cooldown": settings.OTP_RESEND_COOLDOWN_SECONDS,
         }
-        data.update(_whatsapp_service_info())
+        data["email"] = request.user.email
 
         if settings.OTP_DEBUG_RETURN:
             data["debug_otp"] = issued.code
@@ -372,20 +354,19 @@ class OTPVerifyView(generics.GenericAPIView):
 
 
 # ============================================================
-# WHATSAPP SEND OTP (pending registration, phone-first entry)
+# EMAIL SEND OTP (pending registration recovery)
 # ============================================================
 
-class WhatsAppSendOTPView(generics.GenericAPIView):
-    """Request/resume a WhatsApp OTP for a phone number.
+class EmailSendOTPView(generics.GenericAPIView):
+    """Request/resume an email OTP for a pending registration.
 
-    If an active pending registration exists for the number, a fresh OTP is
-    delivered and the registration_id is returned (this also lets a user
-    recover the flow after refreshing the OTP screen).  The response is
-    intentionally identical when no registration is pending, so the endpoint
-    cannot be used to discover which numbers are mid-registration.
+    If an active pending registration exists for the email, a fresh OTP is
+    delivered and the registration_id is returned. The response is
+    intentionally identical when no registration is pending, preventing
+    email-address enumeration.
     """
 
-    serializer_class = WhatsAppSendOTPSerializer
+    serializer_class = EmailSendOTPSerializer
     permission_classes = [
         permissions.AllowAny
     ]
@@ -401,27 +382,18 @@ class WhatsAppSendOTPView(generics.GenericAPIView):
             raise_exception=True
         )
 
-        try:
-            phone_number = normalize_phone_number(
-                serializer.validated_data["phone_number"]
-            )
-        except InvalidPhoneNumberError as exc:
-            return Response(
-                {"error": str(exc), "code": "invalid_phone_number"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        pending = find_pending_registration_by_phone(phone_number)
+        email = serializer.validated_data["email"].strip().lower()
+        pending = find_pending_registration_by_email(email)
 
         if pending is None:
             # Enumeration-safe: same shape as the success path.
             return Response(
                 {
                     "message": (
-                        "If a WhatsApp verification is pending for this "
-                        "number, a new code has been sent."
+                        "If an email verification is pending for this "
+                        "address, a new code has been sent."
                     ),
-                    "phone_number": phone_number,
+                    "email": email,
                 },
                 status=status.HTTP_202_ACCEPTED,
             )
@@ -448,20 +420,20 @@ class WhatsAppSendOTPView(generics.GenericAPIView):
 
 
 # ============================================================
-# WHATSAPP VERIFY OTP (completes the registration)
+# EMAIL VERIFY OTP (completes the registration)
 # ============================================================
 
-class WhatsAppVerifyOTPView(generics.GenericAPIView):
+class EmailVerifyOTPView(generics.GenericAPIView):
     """Step 2 of the shared registration flow.
 
     Verifies the OTP tied to a pending registration — entirely server-side —
     then creates the permanent account with the role captured at
-    registration, marks the phone number as verified and returns the normal
+    registration, marks the email as verified and returns the normal
     JWT authentication response.  The request body cannot influence the role
     or any other account attribute.
     """
 
-    serializer_class = WhatsAppVerifyOTPSerializer
+    serializer_class = EmailVerifyOTPSerializer
     permission_classes = [
         permissions.AllowAny
     ]
@@ -498,14 +470,14 @@ class WhatsAppVerifyOTPView(generics.GenericAPIView):
             return _otp_error_response(exc)
 
         logger.info(
-            "Registration completed via WhatsApp OTP: user=%s role=%s",
+            "Registration completed via email OTP: user=%s role=%s",
             user.pk,
             user.role,
         )
 
         payload = issue_tokens(user, request)
         payload["registration"] = "completed"
-        payload["phone_verified"] = True
+        payload["email_verified"] = True
         return Response(payload)
 
 
@@ -514,7 +486,7 @@ class WhatsAppVerifyOTPView(generics.GenericAPIView):
 # ============================================================
 
 class OTPResendView(generics.GenericAPIView):
-    """Resend the WhatsApp OTP for a pending registration.
+    """Resend the email OTP for a pending registration.
 
     Invalidates the previous OTP, resets the attempt counter and enforces
     both the resend cooldown and the per-registration request limit.
@@ -558,12 +530,11 @@ class OTPResendView(generics.GenericAPIView):
             return _otp_error_response(exc)
 
         payload = {
-            "message": "A new code has been sent to your WhatsApp.",
+            "message": "A new code has been sent to your email.",
             "delivery": delivery_channel(issued.delivery),
             "delivered": issued.delivery.delivered,
             "resend_cooldown": settings.OTP_RESEND_COOLDOWN_SECONDS,
         }
-        payload.update(_whatsapp_service_info())
 
         if settings.OTP_DEBUG_RETURN:
             payload["debug_otp"] = issued.code

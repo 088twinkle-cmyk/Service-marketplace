@@ -1,7 +1,7 @@
 /**
- * RegisterScreen — step 1 of the shared WhatsApp OTP registration.
+ * RegisterScreen — step 1 of the shared email OTP registration.
  *
- * Asserts the WhatsApp verification copy, the customer/provider role choice
+ * Asserts the email verification copy, the customer/provider role choice
  * and the hand-over to the shared OTP screen.  The API layer is mocked.
  */
 import React from "react";
@@ -39,19 +39,19 @@ vi.mock("./services/api/client", async () => {
 });
 
 import AppRoutes from "./webRoutes";
+import { getPendingRegistration } from "./auth/auth";
 import RegisterScreen from "./screens/auth/RegisterScreen";
 
 const REGISTRATION_STARTED = {
   registration_id: "reg-token-9",
-  phone_number: "+9779843677123",
+  email: "sita@example.com",
   role: "FREELANCER",
   role_key: "provider",
   expires_in: 1800,
   otp_expires_in: 600,
   resend_cooldown: 45,
-  delivery: "whatsapp",
+  delivery: "email",
   delivered: true,
-  whatsapp_number: "+9779843677123",
 };
 
 function bodyText(): string {
@@ -98,19 +98,16 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe("RegisterScreen — WhatsApp registration entry", () => {
-  it("presents WhatsApp verification, not email or Google verification", async () => {
+describe("RegisterScreen — email registration entry", () => {
+  it("presents email verification, not Google verification", async () => {
     const view = renderAt(<RegisterScreen />, "/register");
     await settle();
 
     const text = view.text();
     expect(text).toContain("Create your account");
-    expect(text).toContain("verify your WhatsApp number");
-    expect(text).toContain("WhatsApp number");
-    expect(text).toContain("Why we verify your WhatsApp");
-    expect(text).toContain("WhatsApp OTP");
-    // The old email verification wording is gone.
-    expect(text).not.toContain("Verify your email");
+    expect(text).toContain("verify your email");
+    expect(text).toContain("Why we verify your email");
+    expect(text).toContain("Email OTP");
     expect(text.toLowerCase()).not.toContain("google");
   });
 
@@ -152,34 +149,32 @@ describe("RegisterScreen — WhatsApp registration entry", () => {
       role: "FREELANCER",
     });
 
-    expect(bodyText()).toContain("WhatsApp code sent");
+    expect(bodyText()).toContain("Email code sent");
+    expect(window.localStorage.getItem("pending_registration_id")).toBe("reg-token-9");
 
     await pressInDocument("Continue");
     await settle();
 
     // Routed to the shared OTP screen with the registration context…
-    expect(view.text()).toContain("Verify your WhatsApp");
+    expect(view.text()).toContain("Verify your email");
     expect(view.text()).toContain("Verifying your provider account");
-    expect(view.text()).toContain("+9779843677123");
     // …and the context is persisted for refresh-safety.
-    expect(window.localStorage.getItem("pending_registration_id")).toBe(
-      "reg-token-9"
-    );
-    expect(window.localStorage.getItem("pending_registration_phone")).toBe(
-      "+9779843677123"
-    );
+    await expect(getPendingRegistration()).resolves.toEqual({
+      registrationId: "reg-token-9",
+      email: "sita@example.com",
+    });
   });
 
-  it("surfaces a WhatsApp-configuration problem from the server", async () => {
+  it("surfaces an email-configuration problem from the server", async () => {
     authApiMock.register.mockRejectedValue(
       Object.assign(
-        new Error("WhatsApp verification is not configured on this server yet."),
+        new Error("Email verification is not configured on this server yet."),
         {
           response: {
             status: 503,
             data: {
-              error: "WhatsApp verification is not configured on this server yet.",
-              code: "whatsapp_unavailable",
+              error: "Email verification is not configured on this server yet.",
+              code: "email_unavailable",
             },
           },
         }
@@ -200,6 +195,6 @@ describe("RegisterScreen — WhatsApp registration entry", () => {
     await pressInDocument("Create account & send code");
     await settle();
 
-    expect(bodyText()).toContain("WhatsApp not available");
+    expect(bodyText()).toContain("Email not available");
   });
 });
