@@ -80,19 +80,18 @@ class OTPCode(models.Model):
     expires_at = models.DateTimeField()
     consumed_at = models.DateTimeField(blank=True, null=True)
     purpose = models.CharField(max_length=40, default="login")
-    # Destination phone number (E.164) for WhatsApp delivery. Kept for audit
-    # purposes — the OTP itself is only ever stored as a hash.
+    # Retained for compatibility with OTP records created before email delivery.
     phone_number = models.CharField(max_length=20, blank=True, default="")
     # Failed verification attempts against this code (brute-force guard).
     attempts = models.PositiveIntegerField(default=0)
     class Meta:
         ordering = ["-created_at"]
 class PendingRegistration(models.Model):
-    """A registration awaiting WhatsApp OTP verification.
+    """A registration awaiting email OTP verification.
 
     The marketplace has one shared registration + OTP flow for customers and
-    providers.  Submitting the registration form stores the data here — NO
-    permanent user account exists until the WhatsApp OTP is verified.  The
+    providers. Submitting the registration form stores the data here — NO
+    permanent user account exists until the email OTP is verified. The
     password is stored as a Django password hash only.
     """
     class Status(models.TextChoices):
@@ -102,7 +101,7 @@ class PendingRegistration(models.Model):
     registration_token = models.CharField(max_length=64, unique=True, db_index=True)
     username = models.CharField(max_length=150)
     email = models.EmailField(db_index=True)
-    # E.164 normalised destination for the WhatsApp OTP (e.g. +9779843677123).
+    # E.164-normalized contact phone number for the new account.
     phone_number = models.CharField(max_length=20, db_index=True)
     role = models.CharField(max_length=20, choices=User.Role.choices)
     # Django password hash — the plaintext password is never persisted.
@@ -113,7 +112,7 @@ class PendingRegistration(models.Model):
     otp_attempts = models.PositiveIntegerField(default=0)
     otp_request_count = models.PositiveIntegerField(default=0)
     otp_sent_at = models.DateTimeField(blank=True, null=True)
-    phone_verified_at = models.DateTimeField(blank=True, null=True)
+    email_verified_at = models.DateTimeField(blank=True, null=True)
     status = models.CharField(
         max_length=20, choices=Status.choices, default=Status.PENDING
     )

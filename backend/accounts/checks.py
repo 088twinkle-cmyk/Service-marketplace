@@ -1,24 +1,42 @@
-"""Django system checks for WhatsApp OTP configuration.
-
-Warns — never errors — when the operator enabled real WhatsApp delivery but
-the required Meta settings are missing.  Only setting NAMES are reported;
-values (especially the access token) never appear in check output.
-"""
+"""Django system checks for account email OTP delivery."""
 from django.conf import settings
 from django.core.checks import Warning as CheckWarning  # noqa: N812
 
+from .email_otp import email_delivery_configured
 from whatsapp.config import missing_whatsapp_settings
 
 
+def check_email_otp_configuration(app_configs=None, **kwargs):
+    if email_delivery_configured():
+        return []
+
+    missing = []
+    if not settings.EMAIL_HOST:
+        missing.append("EMAIL_HOST")
+    if not settings.DEFAULT_FROM_EMAIL:
+        missing.append("DEFAULT_FROM_EMAIL")
+
+    return [
+        CheckWarning(
+            "Email OTP delivery is not configured. "
+            "Registration and login verification cannot send real emails.",
+            hint=(
+                "Set EMAIL_BACKEND to Django's SMTP backend and configure "
+                + ", ".join(missing or ["SMTP settings"])
+                + " in backend/.env. Do not commit email credentials."
+            ),
+            id="accounts.W001",
+        )
+    ]
+
+
 def check_whatsapp_otp_configuration(app_configs=None, **kwargs):
+    """Keep the legacy WhatsApp readiness check available to operators."""
     if not getattr(settings, "WHATSAPP_OTP_ENABLED", False):
-        # Delivery disabled (default): local DEBUG development uses the
-        # clearly-labelled simulated provider; nothing to warn about.
         return []
 
     provider = str(getattr(settings, "WHATSAPP_PROVIDER", "auto") or "auto")
     if provider.strip().lower() == "development":
-        # Explicitly forced mock — the operator knows what they are doing.
         return []
 
     missing = missing_whatsapp_settings()
@@ -32,11 +50,9 @@ def check_whatsapp_otp_configuration(app_configs=None, **kwargs):
             "Every OTP request will answer HTTP 503 whatsapp_not_configured "
             "until they are set in backend/.env.",
             hint=(
-                "Obtain the values from the Meta developer dashboard "
-                "(see WHATSAPP-OTP.md, 'Required Meta credentials'). "
-                "Only the missing setting names are shown here; values are "
-                "never printed."
+                "Only missing setting names are shown; configuration values "
+                "are never printed."
             ),
-            id="accounts.W001",
+            id="accounts.W002",
         )
     ]

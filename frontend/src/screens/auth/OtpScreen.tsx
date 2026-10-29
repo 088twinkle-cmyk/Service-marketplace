@@ -1,5 +1,5 @@
 /**
- * OtpScreen — shared WhatsApp OTP verification (the one screen for BOTH
+ * OtpScreen — shared email OTP verification (the one screen for BOTH
  * customer and provider flows).
  *
  * Three entry modes, resolved on mount:
@@ -8,9 +8,9 @@
  *     (or a pending registration restored from storage after a refresh).
  *  2. login — the backend answered `otp_required` after sign-in; the stored
  *     JWT authenticates the OTP endpoints and the code is requested here.
- *  3. phone — no context at all (deep link / refresh): the user re-enters
- *     their WhatsApp number and the backend resumes the pending
- *     registration for that number.
+ *  3. recovery — no context at all (deep link / refresh): the user re-enters
+ *     their email address and the backend resumes the pending
+ *     registration for that email.
  *
  * After verification the screen routes by role:
  *     customer → customer home      provider → provider home/onboarding
@@ -37,22 +37,19 @@ import {
   getPendingRegistration,
   getPostLoginRoute,
   setAuth,
-  setPendingRegistration,
 } from "../../auth/auth";
 import { colors, radius, spacing, typography } from "../../theme/tokens";
 
 const DEFAULT_COOLDOWN = 45;
 
-type ScreenMode = "resolving" | "registration" | "login" | "phone";
+type ScreenMode = "resolving" | "registration" | "login" | "recovery";
 
 export default function OtpScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{
     registration_id?: string;
-    phone?: string;
-    role?: string;
     email?: string;
-    whatsapp_number?: string;
+    role?: string;
     auto?: string;
   }>();
 
@@ -67,16 +64,15 @@ export default function OtpScreen() {
 
   // Registration mode
   const [registrationId, setRegistrationId] = useState<string | null>(null);
-  const [phoneNumber, setPhoneNumber] = useState(params.phone ?? "");
+  const [destinationEmail, setDestinationEmail] = useState(params.email ?? "");
   const [roleKey, setRoleKey] = useState(params.role ?? "");
-  const [businessNumber, setBusinessNumber] = useState<string>("");
 
   // Login mode
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [email, setEmail] = useState(params.email ?? "");
 
-  // Phone recovery mode
-  const [recoveryPhone, setRecoveryPhone] = useState("");
+  // Email recovery mode
+  const [recoveryEmail, setRecoveryEmail] = useState("");
   const [recoveryError, setRecoveryError] = useState<string | undefined>();
 
   const didAutoRequest = useRef(false);
@@ -111,13 +107,12 @@ export default function OtpScreen() {
       //    copy persisted for refresh-safety).
       const stored = await getPendingRegistration();
       const regId = params.registration_id || stored.registrationId || null;
-      const phone = params.phone || stored.phoneNumber || "";
+      const destination = params.email || stored.email || "";
 
       if (regId) {
         setRegistrationId(regId);
-        setPhoneNumber(phone);
+        setDestinationEmail(destination);
         if (params.role) setRoleKey(params.role);
-        if (params.whatsapp_number) setBusinessNumber(params.whatsapp_number);
         setMode("registration");
         return;
       }
@@ -131,11 +126,11 @@ export default function OtpScreen() {
         return;
       }
 
-      // 3. Nothing to resume — ask for the WhatsApp number.
-      setMode("phone");
+      // 3. Nothing to resume — ask for the email address.
+      setMode("recovery");
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params.registration_id, params.phone]);
+  }, [params.registration_id, params.email]);
 
   // -------------------------------------------------------------
   // Cooldown countdown
@@ -147,7 +142,7 @@ export default function OtpScreen() {
   }, [cooldown]);
 
   // -------------------------------------------------------------
-  // Login mode: request the first WhatsApp OTP on arrival
+  // Login mode: request the first email OTP on arrival
   // -------------------------------------------------------------
   const requestLoginOtp = async (announce: boolean) => {
     if (!accessToken) return;
@@ -155,7 +150,7 @@ export default function OtpScreen() {
     try {
       const res = await authApi.requestOtp(accessToken);
       setCooldown(res.data.resend_cooldown || DEFAULT_COOLDOWN);
-      setBusinessNumber(res.data.whatsapp_number || "");
+      setDestinationEmail(res.data.email || email);
       const devOtp = res.data.debug_otp;
       if (__DEV__ && devOtp) setOtp(devOtp);
       if (announce) {
@@ -163,8 +158,8 @@ export default function OtpScreen() {
           "success",
           "Code sent",
           __DEV__ && devOtp
-            ? "Development mode: WhatsApp delivery is simulated — no real message was sent."
-            : "A 6-digit code has been sent to your WhatsApp."
+            ? "Development mode: email delivery is simulated. Check the backend console or use the development code below."
+            : `A 6-digit code has been sent to ${res.data.email || email}.`
         );
       }
     } catch (err) {
@@ -187,15 +182,15 @@ export default function OtpScreen() {
   const describeOtpError = (err: unknown, fallback = "Something went wrong. Please try again."): string => {
     const code = getApiErrorCode(err);
     switch (code) {
-      case "whatsapp_not_configured":
+      case "email_not_configured":
         return getApiErrorMessage(
           err,
-          "WhatsApp verification is not configured on the server yet. Please contact the administrator."
+          "Email verification is not configured on the server yet. Please contact the administrator."
         );
-      case "whatsapp_unavailable":
+      case "email_unavailable":
         return getApiErrorMessage(
           err,
-          "WhatsApp verification is unavailable on the server right now. Please try again later."
+          "Email verification is unavailable on the server right now. Please try again later."
         );
       case "otp_rate_limited":
         return "Too many code requests. Please wait a few minutes and try again.";
@@ -239,7 +234,7 @@ export default function OtpScreen() {
       return;
     }
     if (code.length !== 6) {
-      setError("Enter the 6-digit code from your WhatsApp message.");
+      setError("Enter the 6-digit code from your email.");
       return;
     }
 
@@ -248,7 +243,7 @@ export default function OtpScreen() {
     try {
       const res =
         mode === "registration" && registrationId
-          ? await authApi.whatsappVerifyOtp(registrationId, code)
+          ? await authApi.emailVerifyOtp(registrationId, code)
           : await authApi.verifyOtp(accessToken as string, code);
 
       if (!res.data.access) {
@@ -257,7 +252,7 @@ export default function OtpScreen() {
       }
 
       const route = await applyAuthAndRoute(res.data);
-      showPopup("success", "WhatsApp verified", "Your number is verified and your account is ready.", () =>
+      showPopup("success", "Email verified", "Your email is verified and your account is ready.", () =>
         router.replace(route)
       );
     } catch (err) {
@@ -307,15 +302,14 @@ export default function OtpScreen() {
       try {
         const res = await authApi.otpResend(registrationId);
         setCooldown(res.data.resend_cooldown || DEFAULT_COOLDOWN);
-        setBusinessNumber(res.data.whatsapp_number || businessNumber);
         const devOtp = res.data.debug_otp;
         if (__DEV__ && devOtp) setOtp(devOtp);
         showPopup(
           "success",
           "Code resent",
           __DEV__ && devOtp
-            ? "Development mode: WhatsApp delivery is simulated — no real message was sent."
-            : "A new code has been sent to your WhatsApp."
+            ? "Development mode: email delivery is simulated. Check the backend console or use the development code below."
+            : `A new code has been sent to ${destinationEmail}.`
         );
       } catch (err) {
         const code = getApiErrorCode(err);
@@ -343,34 +337,34 @@ export default function OtpScreen() {
   };
 
   // -------------------------------------------------------------
-  // Phone recovery (no context — resume by number)
+  // Email recovery (no context — resume by email)
   // -------------------------------------------------------------
-  const sendByPhone = async () => {
-    const trimmed = recoveryPhone.trim();
+  const sendByEmail = async () => {
+    const trimmed = recoveryEmail.trim().toLowerCase();
     if (!trimmed) {
-      setRecoveryError("Enter the WhatsApp number you registered with.");
+      setRecoveryError("Enter the email address you registered with.");
       return;
     }
     setSending(true);
     setRecoveryError(undefined);
     try {
-      const res = await authApi.whatsappSendOtp(trimmed);
-      const data = res.data as { registration_id?: string; phone_number?: string; message?: string; resend_cooldown?: number; whatsapp_number?: string; debug_otp?: string };
+      const res = await authApi.emailSendOtp(trimmed);
+      const data = res.data as { registration_id?: string; email?: string; message?: string; resend_cooldown?: number; debug_otp?: string };
 
       if (!data.registration_id) {
-        // Enumeration-safe response — no pending registration for that number.
+        // Enumeration-safe response — no pending registration for that email.
         showPopup(
           "info",
           "No verification found",
-          "There is no pending WhatsApp verification for that number. Create an account first.",
+          "There is no pending email verification for that address. Create an account first.",
           () => router.replace("/register")
         );
         return;
       }
 
       setRegistrationId(data.registration_id);
-      setPhoneNumber(data.phone_number ?? trimmed);
-      if (data.whatsapp_number) setBusinessNumber(data.whatsapp_number);
+      setDestinationEmail(data.email ?? trimmed);
+      setEmail(data.email ?? trimmed);
       setMode("registration");
       setCooldown(data.resend_cooldown || DEFAULT_COOLDOWN);
       const devOtp = data.debug_otp;
@@ -394,41 +388,42 @@ export default function OtpScreen() {
   const subtitle =
     mode === "login"
       ? email
-        ? `Enter the 6-digit WhatsApp code to finish signing in as ${email}.`
-        : "Enter the 6-digit WhatsApp code to finish signing in."
-      : phoneNumber
-        ? `We've sent a verification code to your WhatsApp number ${phoneNumber}.`
-        : "We've sent a verification code to your WhatsApp.";
+        ? `Enter the 6-digit email code to finish signing in as ${email}.`
+        : "Enter the 6-digit email code to finish signing in."
+      : destinationEmail
+        ? `We've sent a verification code to ${destinationEmail}.`
+        : "We've sent a verification code to your email.";
 
   return (
     <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : undefined}>
       <AuthLayout
         showBack
         onBack={() => router.replace(mode === "login" ? "/login" : "/register")}
-        title="Verify your WhatsApp"
-        subtitle={mode === "phone" ? "Enter the WhatsApp number you registered with." : subtitle}
+        title="Verify your email"
+        subtitle={mode === "recovery" ? "Enter the email address you registered with." : subtitle}
       >
         <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-          {mode === "phone" ? (
+          {mode === "recovery" ? (
             <>
               <View style={styles.notice}>
                 <Icon name="info" size={16} color={colors.primaryDark} />
                 <Text style={styles.noticeText}>
-                  Lost your verification screen? Enter your WhatsApp number and we'll resend the
+                  Lost your verification screen? Enter your email address and we'll resend the
                   code for your pending registration.
                 </Text>
               </View>
 
               <Input
-                label="WhatsApp number"
-                placeholder="+977 98XXXXXXXX"
-                value={recoveryPhone}
+                label="Email address"
+                placeholder="you@example.com"
+                value={recoveryEmail}
                 onChangeText={(value) => {
-                  setRecoveryPhone(value);
+                  setRecoveryEmail(value);
                   setRecoveryError(undefined);
                 }}
-                keyboardType="phone-pad"
+                keyboardType="email-address"
                 autoCapitalize="none"
+                autoComplete="email"
                 error={recoveryError}
                 required
               />
@@ -438,7 +433,7 @@ export default function OtpScreen() {
                 size="lg"
                 fullWidth
                 loading={sending}
-                onPress={sendByPhone}
+                onPress={sendByEmail}
               />
             </>
           ) : (
@@ -456,9 +451,7 @@ export default function OtpScreen() {
               <View style={styles.notice}>
                 <Icon name="info" size={16} color={colors.primaryDark} />
                 <Text style={styles.noticeText}>
-                  {businessNumber
-                    ? `Check WhatsApp for a message from ${businessNumber}. `
-                    : ""}
+                  Check your email inbox (and spam folder) for your verification code.{" "}
                   Codes expire quickly for security — if yours has expired, request a new one
                   below.
                 </Text>

@@ -14,7 +14,7 @@ admin.site.register(KYCVerification)
 admin.site.register(OTPCode)
 @admin.register(PendingRegistration)
 class PendingRegistrationAdmin(admin.ModelAdmin):
-    """Read-mostly view over pending WhatsApp OTP registrations.
+    """Read-mostly view over pending email OTP registrations.
 
     OTP hashes are visible to admins for audit purposes, but the OTP code
     itself is never stored anywhere.
@@ -40,7 +40,7 @@ class PendingRegistrationAdmin(admin.ModelAdmin):
         "otp_expires_at",
         "otp_attempts",
         "otp_request_count",
-        "phone_verified_at",
+        "email_verified_at",
         "created_at",
         "updated_at",
     )

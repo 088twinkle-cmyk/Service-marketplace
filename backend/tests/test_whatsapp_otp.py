@@ -1,8 +1,7 @@
-"""WhatsApp OTP verification — the shared customer/provider registration flow.
+"""Email OTP verification plus isolated WhatsApp provider unit tests.
 
-Every delivery in here goes through the clearly-separated development
-provider (or a mocked Cloud provider), so **no test ever contacts the real
-WhatsApp/Meta API**.
+Email delivery uses Django's console or in-memory backend. WhatsApp provider
+unit tests mock their HTTP requests and never contact Meta.
 """
 from datetime import timedelta
 from unittest import mock
@@ -23,7 +22,10 @@ from whatsapp.service import build_whatsapp_provider, get_whatsapp_otp_service
 
 from .factories import PASSWORD, api_client, auth_client, make_user
 
-DEV = override_settings(WHATSAPP_PROVIDER="development")
+DEV = override_settings(
+    EMAIL_BACKEND="django.core.mail.backends.console.EmailBackend",
+    DEBUG=True,
+)
 
 
 # ============================================================
@@ -245,7 +247,7 @@ class ProviderSelectionTests(TestCase):
 # Shared registration flow
 # ============================================================
 
-class WhatsAppRegistrationFlowTests(TestCase):
+class EmailRegistrationFlowTests(TestCase):
     """Customer and provider registration share ONE OTP flow."""
 
     def setUp(self):
@@ -265,7 +267,7 @@ class WhatsAppRegistrationFlowTests(TestCase):
 
     def verify(self, registration_id, otp):
         return self.client.post(
-            "/api/auth/whatsapp/verify-otp/",
+            "/api/auth/email/verify-otp/",
             {"registration_id": registration_id, "otp": otp},
             format="json",
         )
@@ -275,7 +277,7 @@ class WhatsAppRegistrationFlowTests(TestCase):
         response = self.register(role="CUSTOMER")
         self.assertEqual(response.status_code, 202, response.content)
         body = response.json()
-        self.assertEqual(body["phone_number"], "+9779843677123")
+        self.assertEqual(body["email"], "flow@example.com")
         self.assertEqual(body["role_key"], "customer")
 
         verified = self.verify(body["registration_id"], body["debug_otp"])
@@ -311,7 +313,7 @@ class WhatsAppRegistrationFlowTests(TestCase):
         user = User.objects.get(email="flowp@example.com")
         self.assertEqual(user.role, User.Role.FREELANCER)
         self.assertTrue(hasattr(user, "freelancer_profile"))
-        # Phone verification does NOT replace KYC.
+        # Email verification does NOT replace KYC.
         self.assertFalse(hasattr(user.freelancer_profile, "kyc"))
 
     @DEV
@@ -323,7 +325,7 @@ class WhatsAppRegistrationFlowTests(TestCase):
 
         # The verify request cannot change the role.
         tampered = self.client.post(
-            "/api/auth/whatsapp/verify-otp/",
+            "/api/auth/email/verify-otp/",
             {
                 "registration_id": body["registration_id"],
                 "otp": body["debug_otp"],
@@ -383,7 +385,7 @@ class WhatsAppRegistrationFlowTests(TestCase):
         second = self.register(
             username="seconduser",
             email="second@example.com",
-            phone="9843677123",  # same WhatsApp number, different email
+            phone="9843677123",  # same contact phone, different email
         )
         self.assertEqual(first.status_code, 202)
         self.assertEqual(second.status_code, 202)
@@ -405,15 +407,15 @@ class WhatsAppRegistrationFlowTests(TestCase):
         )
 
     @DEV
-    def test_refresh_recovery_via_send_otp_by_phone(self):
+    def test_refresh_recovery_via_send_otp_by_email(self):
         response = self.register()
         registration_id = response.json()["registration_id"]
 
         # The browser was refreshed and lost the registration id: the user
-        # re-enters their WhatsApp number.
+        # re-enters their email address.
         resumed = self.client.post(
-            "/api/auth/whatsapp/send-otp/",
-            {"phone_number": "+977 9843677123"},
+            "/api/auth/email/send-otp/",
+            {"email": "flow@example.com"},
             format="json",
         )
         # Cooldown is active → 429 with retry_after, not a silent success.
@@ -428,14 +430,14 @@ class WhatsAppRegistrationFlowTests(TestCase):
         pending.save(update_fields=["otp_sent_at"])
 
         resumed = self.client.post(
-            "/api/auth/whatsapp/send-otp/",
-            {"phone_number": "9843677123"},
+            "/api/auth/email/send-otp/",
+            {"email": "FLOW@example.com"},
             format="json",
         )
         self.assertEqual(resumed.status_code, 202, resumed.content)
         body = resumed.json()
         self.assertEqual(body["registration_id"], registration_id)
-        self.assertEqual(body["phone_number"], "+9779843677123")
+        self.assertEqual(body["email"], "flow@example.com")
 
         verified = self.verify(registration_id, body["debug_otp"])
         self.assertEqual(verified.status_code, 200, verified.content)
@@ -443,14 +445,14 @@ class WhatsAppRegistrationFlowTests(TestCase):
     @DEV
     def test_send_otp_is_enumeration_safe(self):
         response = self.client.post(
-            "/api/auth/whatsapp/send-otp/",
-            {"phone_number": "+9779800999999"},
+            "/api/auth/email/send-otp/",
+            {"email": "missing@example.com"},
             format="json",
         )
         self.assertEqual(response.status_code, 202)
         body = response.json()
         self.assertNotIn("registration_id", body)
-        self.assertIn("If a WhatsApp verification is pending", body["message"])
+        self.assertIn("If an email verification is pending", body["message"])
 
 
 # ============================================================
@@ -482,7 +484,7 @@ class OTPSecurityTests(TestCase):
 
     def verify(self, otp, registration_id=None):
         return self.client.post(
-            "/api/auth/whatsapp/verify-otp/",
+            "/api/auth/email/verify-otp/",
             {
                 "registration_id": registration_id or self.registration_id,
                 "otp": otp,
@@ -628,7 +630,7 @@ class OTPNotExposedInProductionTests(TestCase):
 # Provider availability states
 # ============================================================
 
-class WhatsAppConfigurationStatesTests(TestCase):
+class EmailConfigurationStatesTests(TestCase):
     def setUp(self):
         cache.clear()
         self.client = api_client()
@@ -640,82 +642,81 @@ class WhatsAppConfigurationStatesTests(TestCase):
             "phone": "9843677126",
         }
 
-    def test_whatsapp_not_configured_is_reported_clearly(self):
-        # Default settings: WHATSAPP_OTP_ENABLED=false and not DEBUG at test
-        # runtime → no provider. The API must say so instead of pretending.
-        response = self.client.post("/api/auth/register/", self.payload, format="json")
-        self.assertEqual(response.status_code, 503, response.content)
-        body = response.json()
-        self.assertEqual(body["code"], "whatsapp_not_configured")
-        self.assertIn("not configured", body["error"])
-        # Nothing was persisted — no half-finished registration.
-        self.assertEqual(PendingRegistration.objects.count(), 0)
-
     @override_settings(
-        WHATSAPP_OTP_ENABLED=True,
-        WHATSAPP_PROVIDER="auto",
-        DEBUG=True,  # Even with DEBUG on there is no simulation fallback.
-        WHATSAPP_ACCESS_TOKEN="",
-        WHATSAPP_PHONE_NUMBER_ID="",
-        WHATSAPP_OTP_TEMPLATE_NAME="",
+        EMAIL_BACKEND="django.core.mail.backends.smtp.EmailBackend",
+        EMAIL_HOST="",
     )
-    def test_enabled_with_missing_credentials_is_honest_even_in_debug(self):
+    def test_missing_smtp_configuration_is_reported_clearly(self):
         response = self.client.post("/api/auth/register/", self.payload, format="json")
         self.assertEqual(response.status_code, 503, response.content)
         body = response.json()
-        self.assertEqual(body["code"], "whatsapp_not_configured")
+        self.assertEqual(body["code"], "email_not_configured")
         self.assertIn("not configured", body["error"])
         self.assertEqual(PendingRegistration.objects.count(), 0)
 
     @override_settings(
-        WHATSAPP_OTP_ENABLED=True,
-        WHATSAPP_PROVIDER="cloud",
-        WHATSAPP_ACCESS_TOKEN="tok",
-        WHATSAPP_PHONE_NUMBER_ID="pid",
-        WHATSAPP_OTP_TEMPLATE_NAME="otp",
+        EMAIL_BACKEND="django.core.mail.backends.smtp.EmailBackend",
+        EMAIL_HOST="",
+        DEBUG=True,
     )
-    def test_provider_failure_maps_to_sanitised_503(self):
+    def test_missing_smtp_settings_are_honest_even_in_debug(self):
+        response = self.client.post("/api/auth/register/", self.payload, format="json")
+        self.assertEqual(response.status_code, 503, response.content)
+        body = response.json()
+        self.assertEqual(body["code"], "email_not_configured")
+        self.assertIn("not configured", body["error"])
+        self.assertEqual(PendingRegistration.objects.count(), 0)
+
+    @override_settings(
+        EMAIL_BACKEND="django.core.mail.backends.smtp.EmailBackend",
+        EMAIL_HOST="smtp.example.test",
+    )
+    def test_smtp_failure_maps_to_sanitised_503(self):
+        import smtplib
+
         with mock.patch(
-            "whatsapp.providers.cloud.requests.post",
-            side_effect=RuntimeError("socket exploded"),
-        ) as post:
-            # requests.RequestException is what the provider catches; raise
-            # one to simulate a transport failure.
-            import requests
-
-            post.side_effect = requests.ConnectionError("socket exploded")
+            "accounts.email_otp.send_mail",
+            side_effect=smtplib.SMTPException("SMTP authentication failed"),
+        ):
             response = self.client.post(
                 "/api/auth/register/", self.payload, format="json"
             )
 
         self.assertEqual(response.status_code, 503, response.content)
         body = response.json()
-        self.assertEqual(body["code"], "whatsapp_unavailable")
-        # No raw provider error text leaks to the client.
-        self.assertNotIn("socket exploded", str(body))
+        self.assertEqual(body["code"], "email_unavailable")
+        self.assertNotIn("SMTP authentication failed", str(body))
 
-        # The pending registration survives (retryable) but no OTP was
-        # issued and no account exists.
         pending = PendingRegistration.objects.get(email="config@example.com")
         self.assertEqual(pending.otp_code_hash, "")
         self.assertFalse(User.objects.filter(email="config@example.com").exists())
 
     @override_settings(
-        WHATSAPP_OTP_ENABLED=True,
-        WHATSAPP_PROVIDER="auto",
-        WHATSAPP_ACCESS_TOKEN="real-token-value",
-        WHATSAPP_PHONE_NUMBER_ID="",
-        WHATSAPP_OTP_TEMPLATE_NAME="otp",
+        EMAIL_BACKEND="django.core.mail.backends.smtp.EmailBackend",
+        EMAIL_HOST="",
     )
     def test_partial_configuration_still_answers_not_configured(self):
-        """Any single missing credential disables real delivery honestly."""
         response = self.client.post("/api/auth/register/", self.payload, format="json")
         self.assertEqual(response.status_code, 503, response.content)
         body = response.json()
-        self.assertEqual(body["code"], "whatsapp_not_configured")
-        # The configured token value is never echoed back to the client.
-        self.assertNotIn("real-token-value", str(body))
+        self.assertEqual(body["code"], "email_not_configured")
         self.assertEqual(PendingRegistration.objects.count(), 0)
+
+    @override_settings(
+        EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+        OTP_DEBUG_RETURN=False,
+    )
+    def test_registration_otp_is_sent_to_email(self):
+        from django.core import mail
+
+        response = self.client.post("/api/auth/register/", self.payload, format="json")
+        self.assertEqual(response.status_code, 202, response.content)
+        self.assertEqual(response.json()["delivery"], "email")
+        self.assertNotIn("debug_otp", response.json())
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["config@example.com"])
+        self.assertIn("verification code", mail.outbox[0].subject.lower())
+        self.assertRegex(mail.outbox[0].body, r"\b\d{6}\b")
 
 
 # ============================================================

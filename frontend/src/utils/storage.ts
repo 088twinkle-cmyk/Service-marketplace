@@ -11,9 +11,9 @@ export const StorageKeys = {
   SERVICES: "services",
   VIEWED_SERVICES: "viewed_services",
   SEARCH_HISTORY: "search_history",
-  // Pending WhatsApp OTP registration (survives a page refresh).
+  // Pending email OTP registration (survives a page refresh).
   PENDING_REGISTRATION_ID: "pending_registration_id",
-  PENDING_REGISTRATION_PHONE: "pending_registration_phone",
+  PENDING_REGISTRATION_EMAIL: "pending_registration_email",
 } as const;
 
 export async function getItem(key: string): Promise<string | null> {
